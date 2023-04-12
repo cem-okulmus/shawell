@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,7 @@ type PropertyConstraint struct {
 	path     rdf2go.Term // the outgoing property that is being restricted
 	inverse  bool        // indicates that the path is inverted
 	class    rdf2go.Term // restrict the target to a class
+	hasValue rdf2go.Term // restricts to the specified value
 	node     rdf2go.Term // restrict the target to a shape
 	minCount int         // 0 treated as non-defined
 	maxCount int         // 0 treated as non-defined
@@ -32,10 +34,15 @@ func (p PropertyConstraint) String() string {
 	sb.WriteString("on path " + add + p.path.RawValue())
 	if p.class != nil {
 		sb.WriteString(" restricted to class: " + p.class.RawValue())
-	} else {
+	}
+
+	if p.node != nil {
 		sb.WriteString(" restricted to node shape: " + p.node.RawValue())
 	}
-	sb.WriteString(fmt.Sprint("( ", p.minCount, ",", p.maxCount, " )\n"))
+	if p.hasValue != nil {
+		sb.WriteString(" restricted to value: " + p.hasValue.RawValue())
+	}
+	sb.WriteString(fmt.Sprint(" (min:", p.minCount, ", max:", p.maxCount, ") \n"))
 
 	return sb.String()
 }
@@ -133,9 +140,10 @@ func (n NodeShape) String() string {
 
 // GetNodeShape takes as input and RDF graph and a term signifying a NodeShape
 // and then iteratively queries the RDF graph to extract all its details
-func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape) {
+func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape, []string) {
 	subject := rdf2go.NewResource(name)
 	triples := rdf.All(subject, nil, nil)
+	var deps []string
 	// fmt.Println("Found triples", triples)
 
 	isNodeShape := false // determine if its a proper NodeShape at all
@@ -192,8 +200,11 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape) {
 
 				case sh + "class":
 					pc.class = t2.Object
+				case sh + "hasValue":
+					pc.hasValue = t2.Object
 				case sh + "node":
 					pc.node = t2.Object
+					deps = append(deps, pc.node.RawValue())
 				case sh + "minCount":
 					i, err := strconv.Atoi(t2.Object.RawValue())
 					check(err)
@@ -223,10 +234,14 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape) {
 
 		// handling SH Not
 		if t.Predicate.Equal(res(sh + "not")) {
-			blank := t.Object
-
-			negTriple := rdf.One(blank, nil, nil)
-			negatives = append(negatives, negTriple.Object.RawValue())
+			// check if object blank (if so, we need to parse a non-named shape)
+			switch t.Object.(type) {
+			case rdf2go.BlankNode:
+				// TODO
+				panic("complex NOT expressions not yet implemented!")
+			default:
+				negatives = append(negatives, t.Object.RawValue())
+			}
 		}
 
 		if t.Predicate.Equal(res(sh + "closed")) {
@@ -237,6 +252,10 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape) {
 
 	}
 
+	// add negatives and positives to deps
+	deps = append(deps, positives...)
+	deps = append(deps, negatives...)
+
 	return isNodeShape, NodeShape{
 		name:          name,
 		properties:    properties,
@@ -244,7 +263,7 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape) {
 		negativeSlice: negatives,
 		target:        target,
 		closed:        closed,
-	}
+	}, deps
 }
 
 // ToSparql produces a Sparql query that when run against an endpoint returns
@@ -254,6 +273,7 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape) {
 // or do not have the specified shapes.
 func (n NodeShape) ToSparql() string {
 	var sb strings.Builder
+	nonEmpty := false // used to deal with strange "empty" constraints
 
 	sb.WriteString("PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \n")
 	sb.WriteString("PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> \n")
@@ -275,11 +295,13 @@ func (n NodeShape) ToSparql() string {
 	rN := 1 // running number, used to make the vars distinct
 
 	for _, p := range n.properties {
+		nonEmpty = false
 		// check if counting constraints present or not
 		var tb strings.Builder
 		var output string
 
 		if p.inverse {
+			nonEmpty = true
 			tb.WriteString(fmt.Sprint("?obj", rN, " ", p.path.String(), " ?sub .\n"))
 
 			if p.minCount != 0 || p.maxCount != 0 {
@@ -302,6 +324,8 @@ func (n NodeShape) ToSparql() string {
 			}
 
 		} else {
+
+			nonEmpty = true
 			tb.WriteString(fmt.Sprint("?sub ", p.path.String(), " ?obj", rN, " .\n"))
 
 			if p.minCount != 0 || p.maxCount != 0 {
@@ -326,8 +350,15 @@ func (n NodeShape) ToSparql() string {
 			usedPaths = append(usedPaths, p.path.String()) // adding to list of encountered
 
 		}
+
 		if p.class != nil {
-			out := fmt.Sprint("?obj", rN, " (rdfs:type/rdfs:subClassOf)* ", p.class.String(), " .\n")
+
+			nonEmpty = true
+			out := fmt.Sprint("?obj", rN, " rdfs:type/rdfs:subClassOf* ", p.class.String(), " .\n")
+			outputWhereStatements = append(outputWhereStatements, out)
+		}
+		if p.hasValue != nil {
+			out := fmt.Sprint("FILTER ( ?obj", rN, " =", p.hasValue.String(), " )\n")
 			outputWhereStatements = append(outputWhereStatements, out)
 		}
 
@@ -344,6 +375,11 @@ func (n NodeShape) ToSparql() string {
 			outputAttributes = append(outputAttributes, output)
 		}
 		rN++
+	}
+	if !nonEmpty {
+		triple := fmt.Sprint("?sub ?pred ?obj .\n")
+		outputWhereStatements = append(outputWhereStatements, triple)
+
 	}
 
 	// buildling the SELECT line
@@ -377,6 +413,7 @@ func (n NodeShape) ToSparql() string {
 type ShaclDocument struct {
 	nodeShapes []NodeShape
 	shapeNames map[string]*NodeShape // used to unwind references to shapes
+	dependency map[string][]string   // used to store the dependencies among shapes
 }
 
 func (s ShaclDocument) String() string {
@@ -384,28 +421,102 @@ func (s ShaclDocument) String() string {
 	for _, t := range s.nodeShapes {
 		sb.WriteString(fmt.Sprintln("\n", t.String()))
 	}
-	return sb.String()
+
+	sb.WriteString("Deps: \n")
+
+	for k, v := range s.dependency {
+		sb.WriteString(fmt.Sprint(k, " depends on ", v, ", \n"))
+	}
+
+	return abbr(sb.String())
 }
 
 func GetShaclDocument(rdf *rdf2go.Graph) (bool, ShaclDocument) {
 	var out ShaclDocument
-	var detected bool
+	var detected bool = true
 	out.shapeNames = make(map[string]*NodeShape)
+	out.dependency = make(map[string][]string)
 
 	NodeShapeTriples := rdf.All(nil, ResA, res(sh+"NodeShape"))
+	// fmt.Println(res(sh+"NodeShape"), " of node shapes, ", NodeShapeTriples)
 
 	for _, t := range NodeShapeTriples {
 		name := t.Subject.RawValue()
-		ok, ns := GetNodeShape(rdf, name)
+		ok, ns, deps := GetNodeShape(rdf, name)
 		if !ok {
 			detected = false
+			// fmt.Println("Failed during triple", t)
 			break
 		}
 		out.nodeShapes = append(out.nodeShapes, ns)
-		out.shapeNames[name] = &ns // add a reference to newly extracted shape
+		out.shapeNames[name] = &ns  // add a reference to newly extracted shape
+		out.dependency[name] = deps // add the dependencies
 	}
 
 	return detected, out
+}
+
+// Subset returns true if as subset of bs, false otherwise
+func Subset(as []string, bs []string) bool {
+	if len(as) == 0 {
+		return true
+	}
+	encounteredB := make(map[string]struct{})
+	var Empty struct{}
+	for _, b := range bs {
+		encounteredB[b] = Empty
+	}
+
+	for _, a := range as {
+		if _, ok := encounteredB[a]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// RemoveDuplicates is using an algorithm from "SliceTricks" https://github.com/golang/go/wiki/SliceTricks
+func RemoveDuplicates(elements []string) []string {
+	if len(elements) == 0 {
+		return elements
+	}
+	sort.Strings(elements)
+
+	j := 0
+	for i := 1; i < len(elements); i++ {
+		if elements[j] == elements[i] {
+			continue
+		}
+		j++
+
+		// only set what is required
+		elements[j] = elements[i]
+	}
+
+	return elements[:j+1]
+}
+
+// UnwindDependencies computes the trans. closure of deps among node shapes
+func UnwindDependencies(deps map[string][]string) map[string][]string {
+	changed := true
+
+	for changed {
+		changed = false
+
+		for k, v := range deps {
+			for _, ns := range v {
+				v_new, ok := deps[ns]
+				if ok && !Subset(v, v_new) {
+					changed = true
+					deps[k] = RemoveDuplicates(append(v, v_new...))
+				}
+			}
+		}
+
+	}
+
+	return deps
 }
 
 // ToSparql transforms a SHACL document into a series of Sparql queries

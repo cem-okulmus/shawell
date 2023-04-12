@@ -3,11 +3,11 @@
 @prefix dbr: <https://dbpedia.org/resource/> .
 @prefix dbo: <https://dbpedia.org/ontology/> .
 
+
 sh:Car1Shape
 	a sh:NodeShape ;
 	sh:property [			
 		sh:path dbo:part ;
-        sh:node sh:WheelShape;
 		sh:minCount 4 ;
 	] .
 
@@ -15,7 +15,6 @@ sh:Car2Shape
 	a sh:NodeShape ;
 	sh:property [			
 		sh:path dbo:part ;
-        sh:node sh:WheelShape;
 		sh:minCount 5 ;
 	] .
 

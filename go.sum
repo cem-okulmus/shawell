@@ -3,6 +3,12 @@ github.com/deiu/gon3 v0.0.0-20230411081920-f0f8f879f597 h1:xKCSqM+c9FjQIr0Qacn9m
 github.com/deiu/gon3 v0.0.0-20230411081920-f0f8f879f597/go.mod h1:r8Pv5x6dxChq4mb1ZqzTyK3y9w8wDzWt55XAJpfSq34=
 github.com/deiu/rdf2go v0.0.0-20230412071527-43bb57f57f0b h1:QwX8Q6okfPRe/L/dPg+xlN9OfZp49tpk81F5WsCbYjU=
 github.com/deiu/rdf2go v0.0.0-20230412071527-43bb57f57f0b/go.mod h1:d+9YsU6N5OuirjLEOp23T2/+S7OLByerfuv1f89iy90=
+github.com/knakk/digest v0.0.0-20160404164910-fd45becddc49 h1:P6Mw09IOeKKS4klYhjzHzaEx2RcNshynjfDhzCQ8BoE=
+github.com/knakk/digest v0.0.0-20160404164910-fd45becddc49/go.mod h1:dQr9I8Xw26daWGE/crxUleRxmpFI5uhfedWqRNHHq0c=
+github.com/knakk/rdf v0.0.0-20190304171630-8521bf4c5042 h1:Vzdm5hdlLdpJOKK+hKtkV5u7xGZmNW6aUBjGcTfwx84=
+github.com/knakk/rdf v0.0.0-20190304171630-8521bf4c5042/go.mod h1:fYE0718xXI13XMYLc6iHtvXudfyCGMsZ9hxSM1Ommpg=
+github.com/knakk/sparql v0.0.0-20220326141742-15797a7da0ca h1:0Ffwj22PiaD0ptFA5GMNzWzSZ5nUHGdci/EgyUBoEWs=
+github.com/knakk/sparql v0.0.0-20220326141742-15797a7da0ca/go.mod h1:p+ZYMRwt2q61yM/Hc0xB7071dSK51hlDDtF04IYnDeg=
 github.com/linkeddata/gojsonld v0.0.0-20170418210642-4f5db6791326 h1:YP3lfXXYiQV5MKeUqVnxRP5uuMQTLPx+PGYm1UBoU98=
 github.com/linkeddata/gojsonld v0.0.0-20170418210642-4f5db6791326/go.mod h1:nfqkuSNlsk1bvti/oa7TThx4KmRMBmSxf3okHI9wp3E=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

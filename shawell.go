@@ -6,10 +6,13 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
-	// "strconv"
+	"strings"
+	"time"
 
 	"github.com/deiu/rdf2go"
+	"github.com/knakk/sparql"
 )
 
 func check(e error) {
@@ -29,6 +32,15 @@ var (
 	dbr  = "https://dbpedia.org/resource/"
 	rdfs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 )
+
+func abbr(in string) string {
+	in = strings.ReplaceAll(in, sh, "sh:")
+	in = strings.ReplaceAll(in, dbo, "dbo:")
+	in = strings.ReplaceAll(in, dbr, "dbr:")
+	in = strings.ReplaceAll(in, rdfs, "rdfs:")
+
+	return in
+}
 
 var ResA = res(rdfs + "type")
 
@@ -62,24 +74,42 @@ func main() {
 
 	g.Parse(carwheel, "text/turtle")
 
-	fmt.Println("Hello world!")
+	// triple := g.All(nil, res(dbo+"part"), nil)
 
-	triple := g.All(nil, res(dbo+"part"), nil)
-
-	fmt.Println("here are all triples with 'hasPart' as the role:", len(triple))
-	fmt.Println("Here is a turtle RDF graph: ", g.Len())
-	shaclDoc, err := os.Open("resources/carwheel_constraints.ttl")
+	// fmt.Println("here are all triples with 'hasPart' as the role:", len(triple))
+	// fmt.Println("Here is a turtle RDF graph: ", g.Len())
+	shaclDoc, err := os.Open("resources/carwheel_constraints_nonrecursive.ttl")
 	check(err)
 
 	g2 := rdf2go.NewGraph(sh)
 	g2.Parse(shaclDoc, "text/turtle")
-	fmt.Println("Here is a turtle RDF graph: ", g2, g2.Len())
+	// fmt.Println("Here is a turtle RDF graph: ", abbr(g2.String()), g2.Len())
 
 	var parsedDoc ShaclDocument
 
 	found, parsedDoc := GetShaclDocument(g2)
 
 	fmt.Println("Found a ShaclDoc: ", found)
-	fmt.Println("The parsed Shacl Doc", parsedDoc)
-	fmt.Println("\n \n As a Sparql query ", parsedDoc.nodeShapes[0].ToSparql())
+	fmt.Println("The parsed Shacl Doc", parsedDoc.String())
+
+	repo, err := sparql.NewRepo("http://localhost:3030/Cartwheel/",
+		sparql.DigestAuth("", ""),
+		sparql.Timeout(time.Millisecond*1500),
+	)
+
+	var results []*sparql.Results
+
+	for _, n := range parsedDoc.nodeShapes {
+		query := n.ToSparql()
+		res, err := repo.Query(query)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		results = append(results, res)
+	}
+
+	for _, r := range results {
+		fmt.Println(r.Head)
+	}
 }

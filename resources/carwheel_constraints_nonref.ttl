@@ -1,0 +1,23 @@
+@prefix sh: <https://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dbr: <https://dbpedia.org/resource/> .
+@prefix dbo: <https://dbpedia.org/ontology/> .
+
+
+sh:CarShape
+	a sh:NodeShape ;
+	sh:targetClass dbr:Vehicle ;
+	sh:property [			
+		sh:path dbo:part ;
+		sh:minCount 4 ;
+		sh:maxCount 4;
+	] .
+
+sh:WheelShape
+	a sh:NodeShape ;
+	sh:targetObjectsOf dbo:part ; 
+	sh:property [
+		sh:path dbo:shape ;
+		sh:hasValue dbr:Circle ; 
+	] ;
+	sh:closed true .
