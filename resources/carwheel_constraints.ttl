@@ -1,0 +1,55 @@
+@prefix dbo:  <https://dbpedia.org/ontology/> . 
+@prefix dbr:  <https://dbpedia.org/resource/> . 
+@prefix sh:   <https://www.w3.org/ns/shacl#> .
+
+sh:WheelShape
+	a sh:NodeShape ;
+	sh:targetObjectsOf dbo:part ; 
+	sh:property [
+		sh:path dbo:shape ;
+		sh:class dbr:Circle ; 
+	] ;
+	sh:property [
+		sh:path [
+			sh:inversePath dbo:part
+		] ;
+		sh:node sh:CarShape ;
+		sh:maxCount 1 ;
+		sh:minCount 1 ;
+	] ;
+	sh:closed true .
+	
+sh:VehicleShape 
+	a sh:NodeShape ;
+	sh:targetClass dbr:Vehicle .
+	
+sh:Car1Shape
+	a sh:NodeShape ;
+	sh:property [			
+		sh:path dbo:part ;
+		sh:node sh:WheelShape ;
+		sh:minCount 4 ;
+	] ;
+	sh:and (
+		sh:VehicleShape
+	) .
+
+sh:Car2Shape
+	a sh:NodeShape ;
+	sh:property [			
+		sh:path dbo:part ;
+		sh:node sh:WheelShape ;
+		sh:minCount 5 ;
+	] ;
+	sh:and (
+		sh:VehicleShape
+	) .
+
+sh:CarShape
+	a sh:NodeShape ;
+	sh:and (
+		sh:Car1Shape
+	) ;
+	sh:not [
+		a sh:Car2Shape;
+	] .
