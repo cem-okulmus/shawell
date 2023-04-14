@@ -6,13 +6,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/deiu/rdf2go"
-	"github.com/knakk/sparql"
 )
 
 func check(e error) {
@@ -27,7 +24,7 @@ func res(s string) rdf2go.Term {
 
 // making it easier to define proper terms
 var (
-	sh   = "https://www.w3.org/ns/shacl#"
+	sh   = "http://www.w3.org/ns/shacl#"
 	dbo  = "https://dbpedia.org/ontology/"
 	dbr  = "https://dbpedia.org/resource/"
 	rdfs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -92,24 +89,25 @@ func main() {
 	fmt.Println("Found a ShaclDoc: ", found)
 	fmt.Println("The parsed Shacl Doc", parsedDoc.String())
 
-	repo, err := sparql.NewRepo("http://localhost:3030/Cartwheel/",
-		sparql.DigestAuth("", ""),
-		sparql.Timeout(time.Millisecond*1500),
-	)
+	endpoint := GetSparqlEndpoint("http://localhost:3030/Cartwheel/", "", "")
 
-	var results []*sparql.Results
+	var results []Table
 
-	for _, n := range parsedDoc.nodeShapes {
-		query := n.ToSparql()
-		res, err := repo.Query(query)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		results = append(results, res)
+	for _, n := range parsedDoc.nodeShapes[:1] {
+		results = append(results, endpoint.Answer(n))
 	}
 
-	for _, r := range results {
-		fmt.Println(r.Head)
-	}
+	// for i := range results {
+	// 	fmt.Println("Result table of query ", i)
+
+	// 	fmt.Println(results[i].LimitString(5))
+	// }
+
+	parsedDoc.AllCondAnswers(endpoint)
+
+	fmt.Println("CondAnswers for ", sh+"CarShape", "  : ", parsedDoc.condAnswers[sh+"CarShape"].LimitString(5))
+	fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ", parsedDoc.condAnswers[sh+"WheelShape"].LimitString(5))
+
+	fmt.Println("UncondAnswers for CarShape: ", parsedDoc.UnwindAnswer(sh+"CarShape").LimitString(10))
+	fmt.Println("UncondAnswers for WheelShape: ", parsedDoc.UnwindAnswer(sh+"WheelShape").LimitString(13))
 }

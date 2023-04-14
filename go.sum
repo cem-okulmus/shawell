@@ -3,6 +3,8 @@ github.com/deiu/gon3 v0.0.0-20230411081920-f0f8f879f597 h1:xKCSqM+c9FjQIr0Qacn9m
 github.com/deiu/gon3 v0.0.0-20230411081920-f0f8f879f597/go.mod h1:r8Pv5x6dxChq4mb1ZqzTyK3y9w8wDzWt55XAJpfSq34=
 github.com/deiu/rdf2go v0.0.0-20230412071527-43bb57f57f0b h1:QwX8Q6okfPRe/L/dPg+xlN9OfZp49tpk81F5WsCbYjU=
 github.com/deiu/rdf2go v0.0.0-20230412071527-43bb57f57f0b/go.mod h1:d+9YsU6N5OuirjLEOp23T2/+S7OLByerfuv1f89iy90=
+github.com/fatih/color v1.15.0 h1:kOqh6YHBtK8aywxGerMG2Eq3H6Qgoqeo13Bk2Mv/nBs=
+github.com/fatih/color v1.15.0/go.mod h1:0h5ZqXfHYED7Bhv2ZJamyIOUej9KtShiJESRwBDUSsw=
 github.com/knakk/digest v0.0.0-20160404164910-fd45becddc49 h1:P6Mw09IOeKKS4klYhjzHzaEx2RcNshynjfDhzCQ8BoE=
 github.com/knakk/digest v0.0.0-20160404164910-fd45becddc49/go.mod h1:dQr9I8Xw26daWGE/crxUleRxmpFI5uhfedWqRNHHq0c=
 github.com/knakk/rdf v0.0.0-20190304171630-8521bf4c5042 h1:Vzdm5hdlLdpJOKK+hKtkV5u7xGZmNW6aUBjGcTfwx84=
@@ -11,8 +13,18 @@ github.com/knakk/sparql v0.0.0-20220326141742-15797a7da0ca h1:0Ffwj22PiaD0ptFA5G
 github.com/knakk/sparql v0.0.0-20220326141742-15797a7da0ca/go.mod h1:p+ZYMRwt2q61yM/Hc0xB7071dSK51hlDDtF04IYnDeg=
 github.com/linkeddata/gojsonld v0.0.0-20170418210642-4f5db6791326 h1:YP3lfXXYiQV5MKeUqVnxRP5uuMQTLPx+PGYm1UBoU98=
 github.com/linkeddata/gojsonld v0.0.0-20170418210642-4f5db6791326/go.mod h1:nfqkuSNlsk1bvti/oa7TThx4KmRMBmSxf3okHI9wp3E=
+github.com/mattn/go-colorable v0.1.13 h1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=
+github.com/mattn/go-colorable v0.1.13/go.mod h1:7S9/ev0klgBDR4GtXTXX8a3vIGJpMovkB8vQcUbaXHg=
+github.com/mattn/go-isatty v0.0.16/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/yFXSvRLM=
+github.com/mattn/go-isatty v0.0.17 h1:BTarxUcIeDqL27Mc+vyvdWYSL28zpIhv3RoTdsLMPng=
+github.com/mattn/go-isatty v0.0.17/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/yFXSvRLM=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/rychipman/easylex v0.0.0-20160129204217-49ee7767142f h1:L2/fBPABieQnQzfV40k2Zw7IcvZbt0CN5TgwUl8zDCs=
 github.com/rychipman/easylex v0.0.0-20160129204217-49ee7767142f/go.mod h1:MZ2GRTcqmve6EoSbErWgCR+Ash4p8Gc5esHe8MDErss=
 github.com/stretchr/testify v1.8.2 h1:+h33VjcLVPDHtOdpUCuF+7gSuG3yGIftsP1YvFihtJ8=
+github.com/vosmith/pancake v0.0.0-20170503023453-935e4f9b30d6 h1:3SzMzlTh7DuJDNn12Aj5jKmQRfXob6DOGjyqJcjKOI4=
+github.com/vosmith/pancake v0.0.0-20170503023453-935e4f9b30d6/go.mod h1:gMEF5lHy21yX/Gdo/xix2o2KKjlPs2vsS4/cwNmDd8E=
+golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.6.0 h1:MVltZSvRTcU2ljQOhs94SXPftV6DCNnZViHeQps87pQ=
+golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=

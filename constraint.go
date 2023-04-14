@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/deiu/rdf2go"
+	"github.com/fatih/color"
 )
 
 // TODO: maybe handle invertedPath more systematically in the future?
@@ -98,21 +100,21 @@ type NodeShape struct {
 func (n NodeShape) String() string {
 	var sb strings.Builder
 
-	sb.WriteString(n.name[28:])
-	sb.WriteString("\nTarget: " + fmt.Sprint(n.target))
+	sb.WriteString(n.name[len(sh):])
+	sb.WriteString("\n\t\tTarget: " + fmt.Sprint(n.target))
 	switch n.target.(type) {
 	case TargetObjectsOf:
 		sb.WriteString("(TargetObjectOf)")
 	case TargetClass:
 		sb.WriteString("(TargetClass)")
 	}
-	sb.WriteString(fmt.Sprint("\nProperties:", " ", len(n.properties), "\n"))
+	sb.WriteString(fmt.Sprint("\n\t\tProperties:", " ", len(n.properties), "\n"))
 	for _, p := range n.properties {
-		sb.WriteString(p.String())
+		sb.WriteString("\t\t\t" + p.String())
 	}
 
 	if len(n.positiveSlice) > 0 {
-		sb.WriteString(fmt.Sprint("\n SH And:", " ", len(n.positiveSlice), "\n {"))
+		sb.WriteString(fmt.Sprint("\n\t\tSH And:", " ", len(n.positiveSlice), "\n\t\t\t{"))
 		for i, ns := range n.positiveSlice {
 			sb.WriteString(ns)
 			if i < len(n.positiveSlice)-1 {
@@ -123,7 +125,7 @@ func (n NodeShape) String() string {
 	}
 
 	if len(n.negativeSlice) > 0 {
-		sb.WriteString(fmt.Sprint("\n SH Not:", " ", len(n.negativeSlice), "\n {"))
+		sb.WriteString(fmt.Sprint("\n\t\tSH Not:", " ", len(n.negativeSlice), "\n\t\t\t{"))
 		for i, ns := range n.negativeSlice {
 			sb.WriteString(ns)
 			if i < len(n.negativeSlice)-1 {
@@ -133,17 +135,17 @@ func (n NodeShape) String() string {
 		sb.WriteString("}\n")
 	}
 
-	sb.WriteString("\nClosed: " + fmt.Sprint(n.closed))
+	sb.WriteString("\n\t\tClosed: " + fmt.Sprint(n.closed))
 
 	return sb.String()
 }
 
 // GetNodeShape takes as input and RDF graph and a term signifying a NodeShape
 // and then iteratively queries the RDF graph to extract all its details
-func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape, []string) {
+func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependency) {
 	subject := rdf2go.NewResource(name)
 	triples := rdf.All(subject, nil, nil)
-	var deps []string
+	var deps []dependency
 	// fmt.Println("Found triples", triples)
 
 	isNodeShape := false // determine if its a proper NodeShape at all
@@ -204,7 +206,7 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape, []string) {
 					pc.hasValue = t2.Object
 				case sh + "node":
 					pc.node = t2.Object
-					deps = append(deps, pc.node.RawValue())
+					deps = append(deps, dependency{name: pc.node.RawValue(), extrinsic: true})
 				case sh + "minCount":
 					i, err := strconv.Atoi(t2.Object.RawValue())
 					check(err)
@@ -253,10 +255,14 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, NodeShape, []string) {
 	}
 
 	// add negatives and positives to deps
-	deps = append(deps, positives...)
-	deps = append(deps, negatives...)
+	for i := range positives {
+		deps = append(deps, dependency{name: positives[i]})
+	}
+	for i := range negatives {
+		deps = append(deps, dependency{name: negatives[i], negative: true})
+	}
 
-	return isNodeShape, NodeShape{
+	return isNodeShape, &NodeShape{
 		name:          name,
 		properties:    properties,
 		positiveSlice: positives,
@@ -281,7 +287,7 @@ func (n NodeShape) ToSparql() string {
 	sb.WriteString("PREFIX dbr:  <https://dbpedia.org/resource/>\n")
 	sb.WriteString("PREFIX sh:   <http://www.w3.org/ns/shacl#>\n\n")
 
-	sb.WriteString("SELECT distinct (?sub as ?" + n.name[28:] + " )") // initial part
+	sb.WriteString("SELECT distinct (?sub as ?" + n.name[len(sh):] + " )") // initial part
 
 	// for each property constraint with recursive refs
 	var outputAttributes []string
@@ -410,10 +416,20 @@ func (n NodeShape) ToSparql() string {
 	return sb.String()
 }
 
+type dependency struct {
+	name      string // the name of the shape something depends on
+	negative  bool   //  to look for the presence or instead for the absence of a shape
+	extrinsic bool   // whether the dependency is on the shape of another node (extrinsic), or
+	// instead if it is on the current node also (not) being of a certain other shape (intrinsic)
+}
+
 type ShaclDocument struct {
-	nodeShapes []NodeShape
-	shapeNames map[string]*NodeShape // used to unwind references to shapes
-	dependency map[string][]string   // used to store the dependencies among shapes
+	nodeShapes    []*NodeShape
+	shapeNames    map[string]*NodeShape   // used to unwind references to shapes
+	dependency    map[string][]dependency // used to store the dependencies among shapes
+	condAnswers   map[string]Table        // for each NodeShape, its (un)conditional answer
+	uncondAnswers map[string]Table        // caches the results from unwinding
+	answered      bool
 }
 
 func (s ShaclDocument) String() string {
@@ -425,7 +441,30 @@ func (s ShaclDocument) String() string {
 	sb.WriteString("Deps: \n")
 
 	for k, v := range s.dependency {
-		sb.WriteString(fmt.Sprint(k, " depends on ", v, ", \n"))
+		var sb2 strings.Builder
+
+		var c *color.Color
+
+		for _, d := range v {
+			if d.negative {
+				c = color.New(color.FgRed).Add(color.Underline)
+			} else {
+				c = color.New(color.FgGreen).Add(color.Underline)
+			}
+
+			sb2.WriteString(" ")
+			if d.extrinsic {
+				sb2.WriteString(c.Sprint(d.name))
+			} else {
+				sb2.WriteString(c.Sprint("<<", d.name, ">>"))
+			}
+		}
+		if len(v) == 0 {
+			sb.WriteString(fmt.Sprint(k, " depends on nobody. \n"))
+		} else {
+			sb.WriteString(fmt.Sprint(k, " depends on ", sb2.String(), ". \n"))
+		}
+
 	}
 
 	return abbr(sb.String())
@@ -435,7 +474,9 @@ func GetShaclDocument(rdf *rdf2go.Graph) (bool, ShaclDocument) {
 	var out ShaclDocument
 	var detected bool = true
 	out.shapeNames = make(map[string]*NodeShape)
-	out.dependency = make(map[string][]string)
+	out.dependency = make(map[string][]dependency)
+	out.condAnswers = make(map[string]Table)
+	out.uncondAnswers = make(map[string]Table)
 
 	NodeShapeTriples := rdf.All(nil, ResA, res(sh+"NodeShape"))
 	// fmt.Println(res(sh+"NodeShape"), " of node shapes, ", NodeShapeTriples)
@@ -449,11 +490,30 @@ func GetShaclDocument(rdf *rdf2go.Graph) (bool, ShaclDocument) {
 			break
 		}
 		out.nodeShapes = append(out.nodeShapes, ns)
-		out.shapeNames[name] = &ns  // add a reference to newly extracted shape
+
+		if _, ok := out.shapeNames[name]; ok {
+			panic("Two NodeShapes with same name, NodeShapes must be unique!")
+		}
+
+		out.shapeNames[name] = ns // add a reference to newly extracted shape
+
 		out.dependency[name] = deps // add the dependencies
 	}
 
 	return detected, out
+}
+
+// mem checks if an integer b occurs inside a slice as
+func mem(aas [][]rdf2go.Term, b rdf2go.Term) bool {
+	for _, as := range aas {
+		for _, a := range as {
+			if a.Equal(b) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // Subset returns true if as subset of bs, false otherwise
@@ -497,6 +557,15 @@ func RemoveDuplicates(elements []string) []string {
 	return elements[:j+1]
 }
 
+// func flatten(content [][]rdf2go.Term) []rdf2go.Term {
+// 	var out []rdf2go.Term
+
+// 	for i := range content
+// 		for j := range content[i][j] {
+// 			out =
+// 		}
+// }
+
 // UnwindDependencies computes the trans. closure of deps among node shapes
 func UnwindDependencies(deps map[string][]string) map[string][]string {
 	changed := true
@@ -529,4 +598,126 @@ func (s ShaclDocument) ToSparql() []string {
 	}
 
 	return output
+}
+
+func remove(s [][]rdf2go.Term, i int) [][]rdf2go.Term {
+	s[i] = s[len(s)-1]
+	return s[:len(s)-1]
+}
+
+// func remove(slice [][]rdf2go.Term, s int) [][]rdf2go.Term {
+// 	return append(slice[:s], slice[s+1:]...)
+// }
+
+func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
+	for k, v := range s.shapeNames {
+
+		out := ep.Answer(v)
+		// fmt.Println(k, "  for dep ", v.name, " we got the uncond answers ", out.LimitString(5))
+
+		s.condAnswers[k] = out
+	}
+
+	s.answered = true
+}
+
+// UnwindAnswer computes the unconditional answers
+func (s *ShaclDocument) UnwindAnswer(name string) Table {
+	// return empty slice if called before answers have been computed
+
+	if s.answered {
+		_, ok := s.shapeNames[name]
+		if !ok {
+			log.Panic(name, " is not a defined node  shape")
+		}
+		uncondTable := s.condAnswers[name]
+
+		deps, _ := s.dependency[name]
+
+		for _, dep := range deps {
+
+			// check if recursive shape
+			if dep.name == name {
+				log.Panic(name, " is a recursive SHACL node  shape, as it depends on itself.")
+			}
+
+			var depTable Table
+			if _, ok := s.uncondAnswers[dep.name]; ok {
+				depTable = s.uncondAnswers[dep.name]
+			} else {
+				depTable = s.UnwindAnswer(dep.name) // recursively compute the needed uncond. answers
+			}
+			// we now know that we deal with unconditional (unary) answers
+
+			var columnToCompare int
+			if dep.extrinsic {
+				found := false
+				for i, h := range uncondTable.header {
+					if strings.HasPrefix(h, dep.name[28:]) {
+						found = true
+						columnToCompare = i
+					}
+				}
+				if !found {
+					log.Panic("Couldn't find dep ", dep.name, " inside ", uncondTable.header)
+				}
+			} else {
+				columnToCompare = 0 // intrinsic checks are made against the node shape itself
+			}
+
+			// filtering out answers from uncondTable
+
+			var affectedIndices []int // first iterate, _then_ remove!
+
+			for i := range uncondTable.content {
+				if mem(depTable.content, uncondTable.content[i][columnToCompare]) {
+					// fmt.Print("At the position ", depTable.content)
+					// if dep.negative {
+					// fmt.Println("in  ", dep.name, ", found the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
+					// }
+
+					affectedIndices = append(affectedIndices, i)
+				} else {
+					// fmt.Println("for  ", dep.name, " NOT FOUND the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
+				}
+			}
+
+			// fmt.Println("Size of working table before ", len(uncondTable.content))
+
+			if dep.negative { //  for negative deps, we remove the  affected indices
+				sort.Sort(sort.Reverse(sort.IntSlice(affectedIndices)))
+				// sort.Ints(affectedIndices)
+				// fmt.Println("affectedIndices ", affectedIndices)
+				for _, i := range affectedIndices {
+					// fmt.Println("removing ", i, " ", uncondTable.content[i][columnToCompare])
+					uncondTable.content = remove(uncondTable.content, i)
+				}
+			} else { // inversely, for positive deps we only keep the affected  indices
+				var temp [][]rdf2go.Term
+				for _, i := range affectedIndices {
+					temp = append(temp, uncondTable.content[i])
+				}
+
+				uncondTable.content = temp
+			}
+
+			// fmt.Println("Size of working table afters ", len(uncondTable.content), " cheking ", dep.negative, " dep ", dep.name)
+
+			// fmt.Println("result \n", uncondTable.String())
+
+		}
+
+		var newTable Table
+
+		newTable.header = uncondTable.header[:1]
+
+		for i := range uncondTable.content {
+			newTable.content = append(newTable.content, uncondTable.content[i][:1])
+		}
+
+		// create the new mapping
+		s.uncondAnswers[name] = newTable
+	}
+
+	return s.uncondAnswers[name]
 }
