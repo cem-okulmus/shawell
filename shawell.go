@@ -46,9 +46,6 @@ var ResA = res(rdfs + "type")
 //      - how to read complex property elements
 //      -
 //      -> Transform the weird ad-hoc constraints in resources into "proper" SHACL
-//
-
-// TODO:
 //  *  Use rdf2go to parse (full) SHACL documents
 //      - Initially only support NodeShapes
 //      - Supported Features
@@ -59,6 +56,16 @@ var ResA = res(rdfs + "type")
 //            + sh:minCount, sh:maxCount
 //      - sh:and  & sh:not support
 //      - sh:targetClass & sh:targetObjectOf support
+//
+
+// TODO:
+// * consider actual benchmarks to cover, before developing further towards integration with dlv
+// * implement rewriting of conditional answers into logic programs
+// * implement integration with dlv:
+// 		- being able to send programs to dlv
+//		- being able to parse output from dlv back to unconditional answers
+// * consider if target extraction could not be merged into DLV program, to directly get validation
+// report of sorts
 
 func main() {
 	// Set a base URI
@@ -91,11 +98,11 @@ func main() {
 
 	endpoint := GetSparqlEndpoint("http://localhost:3030/Cartwheel/", "", "")
 
-	var results []Table
+	// var results []Table
 
-	for _, n := range parsedDoc.nodeShapes[:1] {
-		results = append(results, endpoint.Answer(n))
-	}
+	// for _, n := range parsedDoc.nodeShapes[:1] {
+	// 	results = append(results, endpoint.Answer(n))
+	// }
 
 	// for i := range results {
 	// 	fmt.Println("Result table of query ", i)
@@ -105,9 +112,12 @@ func main() {
 
 	parsedDoc.AllCondAnswers(endpoint)
 
-	fmt.Println("CondAnswers for ", sh+"CarShape", "  : ", parsedDoc.condAnswers[sh+"CarShape"].LimitString(5))
-	fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ", parsedDoc.condAnswers[sh+"WheelShape"].LimitString(5))
+	fmt.Println("CondAnswers for ", sh+"CarShape", "  : ", parsedDoc.condAnswers[sh+"CarShape"].Limit(5))
+	fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ", parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
 
-	fmt.Println("UncondAnswers for CarShape: ", parsedDoc.UnwindAnswer(sh+"CarShape").LimitString(10))
-	fmt.Println("UncondAnswers for WheelShape: ", parsedDoc.UnwindAnswer(sh+"WheelShape").LimitString(13))
+	fmt.Println("UncondAnswers for CarShape: ", parsedDoc.UnwindAnswer(sh+"CarShape").Limit(10))
+	fmt.Println("UncondAnswers for WheelShape: ", parsedDoc.UnwindAnswer(sh+"WheelShape").Limit(13))
+
+	fmt.Println("Tarets of CarShape ", parsedDoc.GetTargets(sh+"CarShape", endpoint).Limit(5))
+	fmt.Println("Tarets of WheelShape ", parsedDoc.GetTargets(sh+"WheelShape", endpoint).Limit(5))
 }

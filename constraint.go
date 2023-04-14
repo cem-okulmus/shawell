@@ -315,7 +315,7 @@ func (n NodeShape) ToSparql() string {
 				tb.WriteString(fmt.Sprint("SELECT ?InnerPred", rN, " ?InnerObj", rN))
 				tb.WriteString(fmt.Sprint(" (COUNT (DISTINCT ?InnerSub", rN, ") AS ?countObj", rN, ")"))
 				tb.WriteString(fmt.Sprint(" (GROUP_CONCAT (DISTINCT ?InnerSub", rN, ") AS ?listObjs", rN, ")\n"))
-				tb.WriteString(fmt.Sprint("WHERE {\n"))
+				tb.WriteString("WHERE {\n")
 				tb.WriteString(fmt.Sprint("?InnerSub", rN, " ", p.path.String(), " ?InnerObj", rN, " .\n"))
 				tb.WriteString("}\n")
 				tb.WriteString(fmt.Sprint("GROUP BY ?InnerPred", rN, " ?InnerObj", rN, "\n"))
@@ -339,7 +339,7 @@ func (n NodeShape) ToSparql() string {
 				tb.WriteString(fmt.Sprint("SELECT ?InnerSub", rN, " ?InnerPred", rN))
 				tb.WriteString(fmt.Sprint(" (COUNT (DISTINCT ?InnerObj", rN, ") AS ?countObj", rN, ")"))
 				tb.WriteString(fmt.Sprint(" (GROUP_CONCAT (DISTINCT ?InnerObj", rN, ") AS ?listObjs", rN, ")\n"))
-				tb.WriteString(fmt.Sprint("WHERE {\n"))
+				tb.WriteString("WHERE {\n")
 				tb.WriteString(fmt.Sprint("?InnerSub", rN, " ", p.path.String(), " ?InnerObj", rN, " .\n"))
 				tb.WriteString("}\n")
 				tb.WriteString(fmt.Sprint("GROUP BY ?InnerSub", rN, " ?InnerPred", rN, "\n"))
@@ -383,7 +383,7 @@ func (n NodeShape) ToSparql() string {
 		rN++
 	}
 	if !nonEmpty {
-		triple := fmt.Sprint("?sub ?pred ?obj .\n")
+		triple := "?sub ?pred ?obj .\n"
 		outputWhereStatements = append(outputWhereStatements, triple)
 
 	}
@@ -402,7 +402,7 @@ func (n NodeShape) ToSparql() string {
 
 	// Building the line for closedness condition
 	if n.closed {
-		sb.WriteString(fmt.Sprint("FILTER NOT EXISTS {?sub ?pred ?objClose FILTER ( ?pred NOT IN ("))
+		sb.WriteString("FILTER NOT EXISTS {?sub ?pred ?objClose FILTER ( ?pred NOT IN (")
 		for i, p := range usedPaths {
 			sb.WriteString(p)
 			if i < len(usedPaths)-1 {
@@ -632,7 +632,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 		}
 		uncondTable := s.condAnswers[name]
 
-		deps, _ := s.dependency[name]
+		deps := s.dependency[name]
 
 		for _, dep := range deps {
 
@@ -677,9 +677,10 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 					// }
 
 					affectedIndices = append(affectedIndices, i)
-				} else {
-					// fmt.Println("for  ", dep.name, " NOT FOUND the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
 				}
+				// else {
+				// fmt.Println("for  ", dep.name, " NOT FOUND the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
+				// }
 			}
 
 			// fmt.Println("Size of working table before ", len(uncondTable.content))
@@ -720,4 +721,88 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 	}
 
 	return s.uncondAnswers[name]
+}
+
+func (s ShaclDocument) GetTargets(name string, ep endpoint) Table {
+	ns, ok := s.shapeNames[name]
+	if !ok {
+		log.Panic(name, " is not a defined node  shape")
+	}
+	var out Table
+
+	switch ns.target.(type) {
+	case TargetClass:
+		t := ns.target.(TargetClass)
+
+		query := "" +
+			"PREFIX db: <http://dbpedia.org/>\n" +
+			"PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n" +
+			"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n" +
+			"PREFIX dbo:  <https://dbpedia.org/ontology/>\n" +
+			"PREFIX dbr:  <https://dbpedia.org/resource/>\n" +
+			"PREFIX sh:   <http://www.w3.org/ns/shacl#>\n\n" +
+			"SELECT ?sub {\n" +
+			"  ?sub ?a NODE .\n" +
+			"}"
+
+		query = strings.ReplaceAll(query, "NODE", t.class.String())
+
+		fmt.Println(query)
+
+		out = ep.Query(query)
+	case TargetNode:
+		t := ns.target.(TargetNode)
+
+		query := "" +
+			"PREFIX db: <http://dbpedia.org/>\n" +
+			"PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n" +
+			"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n" +
+			"PREFIX dbo:  <https://dbpedia.org/ontology/>\n" +
+			"PREFIX dbr:  <https://dbpedia.org/resource/>\n" +
+			"PREFIX sh:   <http://www.w3.org/ns/shacl#>\n\n" +
+			"ASK {\n" +
+			"  ?sub ?pred ?obj .\n" +
+			"  FILTER (?sub = NODE || ?pred = NODE || ?obj = NODE) \n" +
+			"}"
+
+		query = strings.ReplaceAll(query, "NODE", t.node.String())
+
+		out = ep.Query(query)
+	case TargetSubjectOf:
+		t := ns.target.(TargetSubjectOf)
+
+		query := "" +
+			"PREFIX db: <http://dbpedia.org/>\n" +
+			"PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n" +
+			"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n" +
+			"PREFIX dbo:  <https://dbpedia.org/ontology/>\n" +
+			"PREFIX dbr:  <https://dbpedia.org/resource/>\n" +
+			"PREFIX sh:   <http://www.w3.org/ns/shacl#>\n\n" +
+			"SELECT ?sub {\n" +
+			"  ?sub NODE ?obj .\n" +
+			"}"
+
+		query = strings.ReplaceAll(query, "NODE", t.path.String())
+
+		out = ep.Query(query)
+	case TargetObjectsOf:
+		t := ns.target.(TargetObjectsOf)
+
+		query := "" +
+			"PREFIX db: <http://dbpedia.org/>\n" +
+			"PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n" +
+			"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n" +
+			"PREFIX dbo:  <https://dbpedia.org/ontology/>\n" +
+			"PREFIX dbr:  <https://dbpedia.org/resource/>\n" +
+			"PREFIX sh:   <http://www.w3.org/ns/shacl#>\n\n" +
+			"SELECT ?obj {\n" +
+			"  ?sub NODE ?obj .\n" +
+			"}"
+
+		query = strings.ReplaceAll(query, "NODE", t.path.String())
+
+		out = ep.Query(query)
+	}
+
+	return out
 }

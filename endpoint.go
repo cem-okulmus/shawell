@@ -25,16 +25,16 @@ func (t Table) String() string {
 		for j := range t.content[i] {
 			sb.WriteString(fmt.Sprint(t.content[i][j]))
 			if j <= len(t.content[i])-1 {
-				sb.WriteString(fmt.Sprint("\t"))
+				sb.WriteString("\t")
 			}
 		}
-		sb.WriteString(fmt.Sprint("\n"))
+		sb.WriteString("\n")
 	}
 
 	return sb.String()
 }
 
-func (t Table) LimitString(n int) string {
+func (t Table) Limit(n int) string {
 	if n > len(t.content) {
 		n = len(t.content)
 	}
@@ -46,10 +46,10 @@ func (t Table) LimitString(n int) string {
 		for j := range t.content[i] {
 			sb.WriteString(fmt.Sprint(t.content[i][j]))
 			if j <= len(t.content[i])-1 {
-				sb.WriteString(fmt.Sprint("\t"))
+				sb.WriteString("\t")
 			}
 		}
-		sb.WriteString(fmt.Sprint("\n"))
+		sb.WriteString("\n")
 	}
 
 	if n < len(t.content) {
@@ -62,16 +62,14 @@ func (t Table) LimitString(n int) string {
 func GetTable(r *sparql.Results) Table {
 	var resultTable [][]rdf2go.Term
 
-	var ordering map[string]int
-	ordering = make(map[string]int)
+	var ordering map[string]int = make(map[string]int)
 
 	for i, s := range r.Head.Vars {
 		ordering[s] = i
 	}
 
 	for _, t := range r.Solutions() {
-		var tupleOrdered []rdf2go.Term
-		tupleOrdered = make([]rdf2go.Term, len(t))
+		var tupleOrdered []rdf2go.Term = make([]rdf2go.Term, len(t))
 
 		for k, v := range t {
 			tupleOrdered[ordering[k]] = res(v.String()) // needed since range over map unsorted
@@ -85,6 +83,7 @@ func GetTable(r *sparql.Results) Table {
 
 type endpoint interface {
 	Answer(ns *NodeShape) Table
+	Query(s string) Table
 }
 
 type SparqlEndpoint struct {
@@ -104,6 +103,15 @@ func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
 // Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
 func (s SparqlEndpoint) Answer(ns *NodeShape) Table {
 	query := ns.ToSparql()
+	res, err := s.repo.Query(query)
+	check(err)
+
+	return GetTable(res)
+}
+
+// Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
+func (s SparqlEndpoint) Query(query string) Table {
+	// query := ns.ToSparql()
 	res, err := s.repo.Query(query)
 	check(err)
 
