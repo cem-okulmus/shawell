@@ -17,21 +17,7 @@ type Table struct {
 }
 
 func (t Table) String() string {
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintln(t.header))
-
-	for i := range t.content {
-		for j := range t.content[i] {
-			sb.WriteString(fmt.Sprint(t.content[i][j]))
-			if j <= len(t.content[i])-1 {
-				sb.WriteString("\t")
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
+		return t.Limit(len(t.content))
 }
 
 func (t Table) Limit(n int) string {
@@ -53,7 +39,8 @@ func (t Table) Limit(n int) string {
 	}
 
 	if n < len(t.content) {
-		sb.WriteString(fmt.Sprint("\t\t⋮ (showing first ", n, " lines from ", len(t.content), " total) \n"))
+		sb.WriteString(fmt.Sprint("\t\t⋮ (showing first ", 
+			n, " lines from ", len(t.content), " total) \n"))
 	}
 
 	return sb.String()

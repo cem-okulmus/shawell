@@ -11,7 +11,7 @@ import (
 	"github.com/fatih/color"
 )
 
-// TODO: maybe handle invertedPath more systematically in the future?
+// TODO: implement sh:in, and generalise sh:hasValue into it (needs some research)
 
 // PropertyConstraint expresses contstraints on properties that go out
 // from the target node.
@@ -158,10 +158,6 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependenc
 
 	// fmt.Println("Checking triples!")
 	for _, t := range triples {
-		// fmt.Println(res("a").RawValue())
-
-		// fmt.Println("Looking at triple", t)
-
 		if t.Object.Equal(res(sh+"NodeShape")) && t.Predicate.Equal(ResA) {
 			isNodeShape = true
 		}
@@ -218,7 +214,6 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependenc
 				}
 			}
 			properties = append(properties, pc)
-
 		}
 
 		// handling SH AND list
@@ -231,7 +226,6 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependenc
 					positives = append(positives, t2.Object.RawValue())
 				}
 			}
-
 		}
 
 		// handling SH Not
@@ -251,7 +245,6 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependenc
 			check(err)
 			closed = b
 		}
-
 	}
 
 	// add negatives and positives to deps
@@ -429,6 +422,7 @@ type ShaclDocument struct {
 	dependency    map[string][]dependency // used to store the dependencies among shapes
 	condAnswers   map[string]Table        // for each NodeShape, its (un)conditional answer
 	uncondAnswers map[string]Table        // caches the results from unwinding
+	targets       map[string]Table        // caches for targets
 	answered      bool
 }
 
@@ -477,6 +471,7 @@ func GetShaclDocument(rdf *rdf2go.Graph) (bool, ShaclDocument) {
 	out.dependency = make(map[string][]dependency)
 	out.condAnswers = make(map[string]Table)
 	out.uncondAnswers = make(map[string]Table)
+	out.targets = make(map[string]Table)
 
 	NodeShapeTriples := rdf.All(nil, ResA, res(sh+"NodeShape"))
 	// fmt.Println(res(sh+"NodeShape"), " of node shapes, ", NodeShapeTriples)
@@ -536,7 +531,6 @@ func Subset(as []string, bs []string) bool {
 	return true
 }
 
-// RemoveDuplicates is using an algorithm from "SliceTricks" https://github.com/golang/go/wiki/SliceTricks
 func RemoveDuplicates(elements []string) []string {
 	if len(elements) == 0 {
 		return elements
@@ -625,6 +619,11 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 func (s *ShaclDocument) UnwindAnswer(name string) Table {
 	// return empty slice if called before answers have been computed
 
+	// check if result is already cached
+	if out, ok := s.uncondAnswers[name]; ok {
+		return out
+	}
+
 	if s.answered {
 		_, ok := s.shapeNames[name]
 		if !ok {
@@ -673,13 +672,15 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 				if mem(depTable.content, uncondTable.content[i][columnToCompare]) {
 					// fmt.Print("At the position ", depTable.content)
 					// if dep.negative {
-					// fmt.Println("in  ", dep.name, ", found the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
+					// fmt.Println("in  ", dep.name, ", found
+					// the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
 					// }
 
 					affectedIndices = append(affectedIndices, i)
 				}
 				// else {
-				// fmt.Println("for  ", dep.name, " NOT FOUND the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
+				// fmt.Println("for  ", dep.name, " NOT FOUND the term ",
+				//	uncondTable.content[i][columnToCompare].String(), " ", i)
 				// }
 			}
 
@@ -702,7 +703,8 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 				uncondTable.content = temp
 			}
 
-			// fmt.Println("Size of working table afters ", len(uncondTable.content), " cheking ", dep.negative, " dep ", dep.name)
+			// fmt.Println("Size of working table afters ", len(uncondTable.content),
+			// " cheking ", dep.negative, " dep ", dep.name)
 
 			// fmt.Println("result \n", uncondTable.String())
 
@@ -723,12 +725,17 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 	return s.uncondAnswers[name]
 }
 
-func (s ShaclDocument) GetTargets(name string, ep endpoint) Table {
+func (s *ShaclDocument) GetTargets(name string, ep endpoint) Table {
 	ns, ok := s.shapeNames[name]
 	if !ok {
 		log.Panic(name, " is not a defined node  shape")
 	}
 	var out Table
+
+	// check if result is already cached
+	if out, ok := s.targets[name]; ok {
+		return out
+	}
 
 	switch ns.target.(type) {
 	case TargetClass:
@@ -747,7 +754,7 @@ func (s ShaclDocument) GetTargets(name string, ep endpoint) Table {
 
 		query = strings.ReplaceAll(query, "NODE", t.class.String())
 
-		fmt.Println(query)
+		// fmt.Println(query)
 
 		out = ep.Query(query)
 	case TargetNode:
@@ -804,5 +811,57 @@ func (s ShaclDocument) GetTargets(name string, ep endpoint) Table {
 		out = ep.Query(query)
 	}
 
+	// cache the result
+	s.targets[name] = out
+
 	return out
+}
+
+// InvalidTargets compares the targets of a node shape against the decorated graph and
+// returns those targets that do not have this shape
+func (s *ShaclDocument) InvalidTargets(name string, ep endpoint) Table {
+	var out Table
+
+	if !s.answered {
+		s.AllCondAnswers(ep)
+	}
+
+	nodesWithShape := s.UnwindAnswer(name)
+	// fmt.Println("Answers: ", len(nodesWithShape.content))
+
+	targets := s.GetTargets(name, ep)
+	out.header = append(out.header, "Not "+name[len(sh):])
+
+outer:
+	for _, t := range targets.content {
+		term := t[0]
+		for _, n := range nodesWithShape.content {
+			if n[0].Equal(term) {
+				// fmt.Println("Found ", term, " in the answer")
+				continue outer
+			}
+		}
+		out.content = append(out.content, t)
+	}
+
+	return out
+}
+
+// Validate checks for each of the node shapes of a SHACL document, whether their target nodes
+// occur in the decorated graph with the shapes they are supposed to. If not, it returns false
+// as well as list of tables for each node shape of the nodes that fail validation.
+func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table) {
+	var out map[string]Table = make(map[string]Table)
+	var result bool = true
+
+	// Produce InvalidTargets for each node shape
+	for i := range s.nodeShapes {
+		invalidTargets := s.InvalidTargets(s.nodeShapes[i].name, ep)
+		if len(invalidTargets.content) > 0 {
+			out[s.nodeShapes[i].name] = invalidTargets
+			result = false
+		}
+	}
+
+	return result, out
 }

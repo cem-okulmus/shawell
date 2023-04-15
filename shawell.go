@@ -110,14 +110,33 @@ func main() {
 	// 	fmt.Println(results[i].LimitString(5))
 	// }
 
-	parsedDoc.AllCondAnswers(endpoint)
+	// parsedDoc.AllCondAnswers(endpoint)
 
-	fmt.Println("CondAnswers for ", sh+"CarShape", "  : ", parsedDoc.condAnswers[sh+"CarShape"].Limit(5))
-	fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ", parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
+	// fmt.Println("CondAnswers for ",
+	// 	sh+"CarShape", "  : ", parsedDoc.condAnswers[sh+"CarShape"].Limit(5))
+	// fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ",
+	// 	parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
 
-	fmt.Println("UncondAnswers for CarShape: ", parsedDoc.UnwindAnswer(sh+"CarShape").Limit(10))
-	fmt.Println("UncondAnswers for WheelShape: ", parsedDoc.UnwindAnswer(sh+"WheelShape").Limit(13))
+	// fmt.Println("UncondAnswers for CarShape: ",
+	// 	parsedDoc.UnwindAnswer(sh+"CarShape").Limit(10))
+	// fmt.Println("UncondAnswers for WheelShape: ",
+	// 	parsedDoc.UnwindAnswer(sh+"WheelShape").Limit(13))
 
-	fmt.Println("Tarets of CarShape ", parsedDoc.GetTargets(sh+"CarShape", endpoint).Limit(5))
-	fmt.Println("Tarets of WheelShape ", parsedDoc.GetTargets(sh+"WheelShape", endpoint).Limit(5))
+	// fmt.Println("Query for CarShape\n ", parsedDoc.shapeNames[sh+"Car2Shape"].ToSparql())
+
+	// fmt.Println("Targets of CarShape ",
+	// 	parsedDoc.GetTargets(sh+"CarShape", endpoint).Limit(5))
+	// fmt.Println("Targets of WheelShape ",
+	// 	parsedDoc.GetTargets(sh+"WheelShape", endpoint).Limit(5))
+
+	// fmt.Println("Invalid Targets of CarShape ",
+	// 	parsedDoc.InvalidTargets(sh+"CarShape", endpoint).Limit(5))
+
+	res, invalidTargets := parsedDoc.Validate(endpoint)
+
+	fmt.Println("Shacl Document valid: ", res)
+
+	for k, v := range invalidTargets {
+		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(5))
+	}
 }
