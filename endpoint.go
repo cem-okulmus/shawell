@@ -17,7 +17,7 @@ type Table struct {
 }
 
 func (t Table) String() string {
-		return t.Limit(len(t.content))
+	return t.Limit(len(t.content))
 }
 
 func (t Table) Limit(n int) string {
@@ -39,7 +39,7 @@ func (t Table) Limit(n int) string {
 	}
 
 	if n < len(t.content) {
-		sb.WriteString(fmt.Sprint("\t\t⋮ (showing first ", 
+		sb.WriteString(fmt.Sprint("\t\t⋮ (showing first ",
 			n, " lines from ", len(t.content), " total) \n"))
 	}
 

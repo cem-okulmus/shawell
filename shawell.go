@@ -82,7 +82,7 @@ func main() {
 
 	// fmt.Println("here are all triples with 'hasPart' as the role:", len(triple))
 	// fmt.Println("Here is a turtle RDF graph: ", g.Len())
-	shaclDoc, err := os.Open("resources/carwheel_constraints_nonrecursive.ttl")
+	shaclDoc, err := os.Open("resources/carwheel_constraints_nonrecursive_v2.ttl")
 	check(err)
 
 	g2 := rdf2go.NewGraph(sh)
@@ -110,10 +110,12 @@ func main() {
 	// 	fmt.Println(results[i].LimitString(5))
 	// }
 
-	// parsedDoc.AllCondAnswers(endpoint)
+	parsedDoc.AllCondAnswers(endpoint)
 
 	// fmt.Println("CondAnswers for ",
-	// 	sh+"CarShape", "  : ", parsedDoc.condAnswers[sh+"CarShape"].Limit(5))
+	// 	sh+"Car1Shape", "  : ", parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
+
+	fmt.Println("Query for WheelShape: \n", parsedDoc.shapeNames[sh+"Car1Shape"].ToSparql())
 	// fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ",
 	// 	parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
 
@@ -139,4 +141,7 @@ func main() {
 	for k, v := range invalidTargets {
 		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(5))
 	}
+
+	// nodes := []string{"<https://dbpedia.org/resource/V41>", "<https://dbpedia.org/resource/V19>"}
+	// fmt.Println("Failure Witness WheelShape:\n", parsedDoc.shapeNames[sh+"WheelShape"].WitnessQuery(nodes))
 }

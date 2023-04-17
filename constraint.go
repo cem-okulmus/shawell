@@ -115,23 +115,25 @@ func (n NodeShape) String() string {
 
 	if len(n.positiveSlice) > 0 {
 		sb.WriteString(fmt.Sprint("\n\t\tSH And:", " ", len(n.positiveSlice), "\n\t\t\t{"))
-		for i, ns := range n.positiveSlice {
-			sb.WriteString(ns)
-			if i < len(n.positiveSlice)-1 {
-				sb.WriteString(",")
-			}
-		}
+		// for i, ns := range n.positiveSlice {
+		// 	sb.WriteString(ns)
+		// 	if i < len(n.positiveSlice)-1 {
+		// 		sb.WriteString(",")
+		// 	}
+		// }
+		sb.WriteString(strings.Join(n.positiveSlice, ", "))
 		sb.WriteString("}\n")
 	}
 
 	if len(n.negativeSlice) > 0 {
 		sb.WriteString(fmt.Sprint("\n\t\tSH Not:", " ", len(n.negativeSlice), "\n\t\t\t{"))
-		for i, ns := range n.negativeSlice {
-			sb.WriteString(ns)
-			if i < len(n.negativeSlice)-1 {
-				sb.WriteString(",")
-			}
-		}
+		// for i, ns := range n.negativeSlice {
+		// 	sb.WriteString(ns)
+		// 	if i < len(n.negativeSlice)-1 {
+		// 		sb.WriteString(",")
+		// 	}
+		// }
+		sb.WriteString(strings.Join(n.negativeSlice, ", "))
 		sb.WriteString("}\n")
 	}
 
@@ -353,7 +355,7 @@ func (n NodeShape) ToSparql() string {
 		if p.class != nil {
 
 			nonEmpty = true
-			out := fmt.Sprint("?obj", rN, " rdfs:type/rdfs:subClassOf* ", p.class.String(), " .\n")
+			out := fmt.Sprint("?obj", rN, " rdf:type/rdfs:subClassOf* ", p.class.String(), " .\n")
 			outputWhereStatements = append(outputWhereStatements, out)
 		}
 		if p.hasValue != nil {
@@ -366,9 +368,9 @@ func (n NodeShape) ToSparql() string {
 		if p.node != nil { // recursive constraint, adding to head
 
 			if p.minCount != 0 || p.maxCount != 0 {
-				output = fmt.Sprint("(?listObjs", rN, " AS ?", p.node.RawValue()[28:], rN, " )")
+				output = fmt.Sprint("(?listObjs", rN, " AS ?", p.node.RawValue()[len(sh):], rN, " )")
 			} else {
-				output = fmt.Sprint("(?obj", rN, " AS ?", p.node.RawValue()[28:], rN, " )")
+				output = fmt.Sprint("(?obj", rN, " AS ?", p.node.RawValue()[len(sh):], rN, " )")
 			}
 
 			outputAttributes = append(outputAttributes, output)
@@ -396,13 +398,166 @@ func (n NodeShape) ToSparql() string {
 	// Building the line for closedness condition
 	if n.closed {
 		sb.WriteString("FILTER NOT EXISTS {?sub ?pred ?objClose FILTER ( ?pred NOT IN (")
-		for i, p := range usedPaths {
-			sb.WriteString(p)
-			if i < len(usedPaths)-1 {
-				sb.WriteString(", ")
-			}
-		}
+		sb.WriteString(strings.Join(usedPaths, ", "))
 		sb.WriteString(" )) }\n\n")
+	}
+
+	sb.WriteString("}\n")
+	return sb.String()
+}
+
+// WitnessQuery returns a Sparql query that produces for a given list of nodes
+// a witness query, which either shows why a given node satisfies or does not satisfy the
+// query that is output in the method ToSparql()
+func (n NodeShape) WitnessQuery(nodes []string) string {
+	var sb strings.Builder
+	nonEmpty := false // used to deal with strange "empty" constraints
+
+	sb.WriteString("PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \n")
+	sb.WriteString("PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> \n")
+	sb.WriteString("PREFIX dbo:  <https://dbpedia.org/ontology/>\n")
+	sb.WriteString("PREFIX dbr:  <https://dbpedia.org/resource/>\n")
+	sb.WriteString("PREFIX sh:   <http://www.w3.org/ns/shacl#>\n\n")
+
+	// Initial part
+	sb.WriteString("SELECT distinct (?sub as ?" + "Witness_of_" + n.name[len(sh):] + " )")
+
+	// for each property constraint with recursive refs
+	var outputAttributes []string
+
+	// one for each property constraint and other constraints
+	var outputWhereStatements []string = []string{"?sub ?pred ?obj.\n"}
+
+	var usedPaths []string // keep track of all (non-inverse) path constraints
+	usedPaths = append(usedPaths, res(rdfs+"type").String())
+
+	rN := 1 // running number, used to make the vars distinct
+
+	// limt to given list of nodes
+	out := fmt.Sprint("FILTER (?sub IN (", strings.Join(nodes, ", "), "))\n")
+	outputWhereStatements = append(outputWhereStatements, out)
+
+	for _, p := range n.properties {
+
+		var innerOutputAttributes []string
+		var innerWhereStatements []string
+
+		nonEmpty = false
+		// check if counting constraints present or not
+		var tb strings.Builder
+		var tb2 strings.Builder
+
+		o := fmt.Sprint("OPTIONAL {\n \t{\n\t\tSELECT (?sub AS ?subcorrel", rN,
+			" ) ?obj", rN, " ")
+		tb.WriteString(o)
+
+		if p.inverse {
+			nonEmpty = true
+			tb2.WriteString(fmt.Sprint("?obj", rN, " ", p.path.String(), " ?sub .\n\t"))
+
+			if p.minCount != 0 || p.maxCount != 0 {
+				tb2.WriteString("{\n\t")
+				tb2.WriteString(fmt.Sprint("SELECT ?InnerPred", rN, " ?InnerObj", rN))
+				tb2.WriteString(fmt.Sprint(" (COUNT (DISTINCT ?InnerSub", rN, ") AS ?countObj", rN, ")"))
+				tb2.WriteString(fmt.Sprint(" (GROUP_CONCAT (DISTINCT ?InnerSub", rN, ") AS ?listObjs", rN, ")\n\t"))
+				tb2.WriteString("WHERE {\n\t")
+				tb2.WriteString(fmt.Sprint("?InnerSub", rN, " ", p.path.String(), " ?InnerObj", rN, " .\n\t"))
+				tb2.WriteString("}\n\t")
+				tb2.WriteString(fmt.Sprint("GROUP BY ?InnerPred", rN, " ?InnerObj", rN, "\n\t"))
+				tb2.WriteString("}\n\t")
+				tb2.WriteString(fmt.Sprint("FILTER (?InnerObj", rN, " = ?sub)\n"))
+
+			}
+
+		} else {
+
+			nonEmpty = true
+			tb2.WriteString(fmt.Sprint("?sub ", p.path.String(), " ?obj", rN, " .\n\t"))
+
+			if p.minCount != 0 || p.maxCount != 0 {
+				tb2.WriteString("{\n\t")
+				tb2.WriteString(fmt.Sprint("SELECT ?InnerSub", rN, " ?InnerPred", rN))
+				tb2.WriteString(fmt.Sprint(" (COUNT (DISTINCT ?InnerObj", rN, ") AS ?countObj", rN, ")"))
+				tb2.WriteString(fmt.Sprint(" (GROUP_CONCAT (DISTINCT ?InnerObj", rN, ") AS ?listObjs", rN, ")\n\t"))
+				tb2.WriteString("WHERE {\n\t")
+				tb2.WriteString(fmt.Sprint("?InnerSub", rN, " ", p.path.String(), " ?InnerObj", rN, " .\n\t"))
+				tb2.WriteString("}\n\t")
+				tb2.WriteString(fmt.Sprint("GROUP BY ?InnerSub", rN, " ?InnerPred", rN, "\n\t"))
+				tb2.WriteString("}\n\t")
+				tb2.WriteString(fmt.Sprint("FILTER (?InnerSub", rN, " = ?sub)\n"))
+
+			}
+			usedPaths = append(usedPaths, p.path.String()) // adding to list of encountered
+
+		}
+		innerWhereStatements = append(innerWhereStatements, tb2.String())
+
+		var pathOutputs []string
+
+		pathOutputs = append(pathOutputs, fmt.Sprint("(", p.path.String(), " AS ?", "path", rN, " )"))
+		// pathOutputs = append(pathOutputs, fmt.Sprint("( ?obj", rN, " AS ?", "obj", rN, " )"))
+		pathOutputs = append(pathOutputs, fmt.Sprint("( ?obj", rN, " AS ?ValueWitness", rN, " ) "))
+
+		// innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("(?obj", rN, " AS ?ValueWitness,", rN, ")"))
+
+		if p.minCount != 0 || p.maxCount != 0 {
+			pathOutputs = append(pathOutputs, fmt.Sprint("( ?countObj", rN, " AS ?CountWitness", rN, " ) "))
+			pathOutputs = append(pathOutputs, fmt.Sprint("( ?listObjs", rN, " AS ?listWitness", rN, " ) "))
+			innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("?countObj", rN, " "))
+			innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("?listObjs", rN, " "))
+		}
+		outputAttributes = append(outputAttributes, pathOutputs...)
+
+		if p.class != nil {
+
+			out := fmt.Sprint("?obj", rN, " rdf:type/rdfs:subClassOf* ", p.class.String(), " .\n")
+			innerWhereStatements = append(innerWhereStatements, out)
+		}
+		if p.hasValue != nil {
+			out := fmt.Sprint("FILTER ( ?obj", rN, " = ", p.hasValue.String(), " )\n")
+			innerWhereStatements = append(innerWhereStatements, out)
+		}
+
+		// outputWhereStatements = append(outputWhereStatements, tb.String())
+
+		tb.WriteString(strings.Join(innerOutputAttributes, " "))
+		tb.WriteString(" WHERE {\n\t")
+		tb.WriteString(strings.Join(innerWhereStatements, "\n\t"))
+		tb.WriteString(fmt.Sprint("\t}\n}\n FILTER(?subcorrel", rN, " = ?sub)\n}"))
+
+		outputWhereStatements = append(outputWhereStatements, tb.String())
+
+		rN++
+	}
+	if !nonEmpty {
+		triple := "?sub ?pred ?obj .\n"
+		outputWhereStatements = append(outputWhereStatements, triple)
+
+	}
+
+	// Building the line for closedness condition
+	if n.closed {
+		var tb strings.Builder
+
+		tb.WriteString("OPTIONAL { { SELECT (?sub AS ?subcorrel) (?pred AS ?closednessWitness) " +
+			"WHERE { ?sub ?pred ?obj2.  FILTER ( ?pred NOT IN (")
+		tb.WriteString(strings.Join(usedPaths, ", "))
+		tb.WriteString(" )) } } FILTER(?subcorrel = ?sub) } \n\n")
+
+		outputWhereStatements = append(outputWhereStatements, tb.String())
+		outputAttributes = append(outputAttributes, "(?closednessWitness as ?clos) ")
+	}
+
+	// buildling the SELECT line
+	for _, a := range outputAttributes {
+		sb.WriteString(" " + a)
+	}
+	sb.WriteString("{ \n")
+
+	// building the inside of the WHERE
+	for _, w := range outputWhereStatements {
+		sb.WriteString(w)
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString("}\n")
@@ -439,7 +594,12 @@ func (s ShaclDocument) String() string {
 
 		var c *color.Color
 
+		rec, unwoundDeps := s.TransitiveClosure(k)
+		if !rec {
+			v = unwoundDeps
+		}
 		for _, d := range v {
+
 			if d.negative {
 				c = color.New(color.FgRed).Add(color.Underline)
 			} else {
@@ -456,7 +616,11 @@ func (s ShaclDocument) String() string {
 		if len(v) == 0 {
 			sb.WriteString(fmt.Sprint(k, " depends on nobody. \n"))
 		} else {
-			sb.WriteString(fmt.Sprint(k, " depends on ", sb2.String(), ". \n"))
+			if rec {
+				sb.WriteString(fmt.Sprint(k, "(rec.) depends on ", sb2.String(), ". \n"))
+			} else {
+				sb.WriteString(fmt.Sprint(k, " depends on ", sb2.String(), ". \n"))
+			}
 		}
 
 	}
@@ -511,6 +675,34 @@ func mem(aas [][]rdf2go.Term, b rdf2go.Term) bool {
 	return false
 }
 
+// memList returns true, if any one element is included
+func memList(aas [][]rdf2go.Term, b rdf2go.Term) bool {
+	elements := strings.Split(b.RawValue(), " ")
+
+	for _, e := range elements {
+		out := mem(aas, res(e))
+		if out {
+			return true
+		}
+	}
+
+	return false
+}
+
+// memList returns true, if all elements are included
+func memListAll(aas [][]rdf2go.Term, b rdf2go.Term) bool {
+	elements := strings.Split(b.RawValue(), " ")
+
+	for _, e := range elements {
+		out := mem(aas, res(e))
+		if !out {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Subset returns true if as subset of bs, false otherwise
 func Subset(as []string, bs []string) bool {
 	if len(as) == 0 {
@@ -561,25 +753,31 @@ func RemoveDuplicates(elements []string) []string {
 // }
 
 // UnwindDependencies computes the trans. closure of deps among node shapes
-func UnwindDependencies(deps map[string][]string) map[string][]string {
-	changed := true
+func (s ShaclDocument) TransitiveClosure(name string) (bool, []dependency) {
+	var out1, out2 []dependency
 
-	for changed {
-		changed = false
+	out1 = append(out1, s.dependency[name]...)
+	out2 = append(out2, out1...)
 
-		for k, v := range deps {
-			for _, ns := range v {
-				v_new, ok := deps[ns]
-				if ok && !Subset(v, v_new) {
-					changed = true
-					deps[k] = RemoveDuplicates(append(v, v_new...))
-				}
-			}
+	for i := range out1 {
+		if out1[i].name == name {
+			return true, []dependency{} // in case of recursive deps, we quit once we hit loop
 		}
-
+		_, new_deps := s.TransitiveClosure(out1[i].name)
+		out2 = append(out2, new_deps...)
 	}
 
-	return deps
+	return false, out2
+}
+
+func DepsToString(dep []dependency) []string {
+	var out []string
+
+	for i := range dep {
+		out = append(out, dep[i].name)
+	}
+
+	return out
 }
 
 // ToSparql transforms a SHACL document into a series of Sparql queries
@@ -633,12 +831,13 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 
 		deps := s.dependency[name]
 
-		for _, dep := range deps {
+		rec, _ := s.TransitiveClosure(name)
+		// check if recursive shape
+		if rec {
+			log.Panic(name, " is a recursive SHACL node  shape, as it depends on itself.")
+		}
 
-			// check if recursive shape
-			if dep.name == name {
-				log.Panic(name, " is a recursive SHACL node  shape, as it depends on itself.")
-			}
+		for _, dep := range deps {
 
 			var depTable Table
 			if _, ok := s.uncondAnswers[dep.name]; ok {
@@ -647,15 +846,20 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 				depTable = s.UnwindAnswer(dep.name) // recursively compute the needed uncond. answers
 			}
 			// we now know that we deal with unconditional (unary) answers
+			if len(depTable.header) > 1 {
+				log.Panic("Received non-unary uncond. Answer! ", depTable)
+			}
 
+			isList := false
 			var columnToCompare int
 			if dep.extrinsic {
 				found := false
 				for i, h := range uncondTable.header {
-					if strings.HasPrefix(h, dep.name[28:]) {
+					if strings.HasPrefix(h, dep.name[len(sh):]) {
 						found = true
 						columnToCompare = i
 					}
+					isList = strings.HasSuffix(h, "List")
 				}
 				if !found {
 					log.Panic("Couldn't find dep ", dep.name, " inside ", uncondTable.header)
@@ -669,19 +873,27 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 			var affectedIndices []int // first iterate, _then_ remove!
 
 			for i := range uncondTable.content {
-				if mem(depTable.content, uncondTable.content[i][columnToCompare]) {
-					// fmt.Print("At the position ", depTable.content)
-					// if dep.negative {
-					// fmt.Println("in  ", dep.name, ", found
-					// the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
-					// }
+				if !isList {
+					if mem(depTable.content, uncondTable.content[i][columnToCompare]) {
+						// fmt.Print("At the position ", depTable.content)
+						// if dep.negative {
+						// fmt.Println("in  ", dep.name, ", found
+						// the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
+						// }
 
-					affectedIndices = append(affectedIndices, i)
+						affectedIndices = append(affectedIndices, i)
+					}
+				} else {
+					if dep.negative {
+						if memList(depTable.content, uncondTable.content[i][columnToCompare]) {
+							affectedIndices = append(affectedIndices, i)
+						}
+					} else {
+						if memListAll(depTable.content, uncondTable.content[i][columnToCompare]) {
+							affectedIndices = append(affectedIndices, i)
+						}
+					}
 				}
-				// else {
-				// fmt.Println("for  ", dep.name, " NOT FOUND the term ",
-				//	uncondTable.content[i][columnToCompare].String(), " ", i)
-				// }
 			}
 
 			// fmt.Println("Size of working table before ", len(uncondTable.content))
