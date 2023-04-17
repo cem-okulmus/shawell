@@ -426,7 +426,7 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 	var outputAttributes []string
 
 	// one for each property constraint and other constraints
-	var outputWhereStatements []string = []string{"?sub ?pred ?obj.\n"}
+	var outputWhereStatements []string = []string{"{?sub ?pred ?obj.}\nUNION\n{?obj ?pred ?sub .}\n"}
 
 	var usedPaths []string // keep track of all (non-inverse) path constraints
 	usedPaths = append(usedPaths, res(rdfs+"type").String())
@@ -496,7 +496,6 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 
 		pathOutputs = append(pathOutputs, fmt.Sprint("(", p.path.String(), " AS ?", "path", rN, " )"))
 		// pathOutputs = append(pathOutputs, fmt.Sprint("( ?obj", rN, " AS ?", "obj", rN, " )"))
-		pathOutputs = append(pathOutputs, fmt.Sprint("( ?obj", rN, " AS ?ValueWitness", rN, " ) "))
 
 		// innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("(?obj", rN, " AS ?ValueWitness,", rN, ")"))
 
@@ -506,17 +505,22 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 			innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("?countObj", rN, " "))
 			innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("?listObjs", rN, " "))
 		}
-		outputAttributes = append(outputAttributes, pathOutputs...)
-
 		if p.class != nil {
 
+			pathOutputs = append(pathOutputs, fmt.Sprint("( COALESCE(?obj", rN,
+				", \"No node of class ", p.class.String(), "\") AS ?ClassWitness", rN, " ) "))
 			out := fmt.Sprint("?obj", rN, " rdf:type/rdfs:subClassOf* ", p.class.String(), " .\n")
 			innerWhereStatements = append(innerWhereStatements, out)
 		}
 		if p.hasValue != nil {
+
+			pathOutputs = append(pathOutputs, fmt.Sprint("( COALESCE(?obj", rN,
+				", \"No node of value ", p.hasValue.String(), "\") AS ?ClassWitness", rN, " ) "))
 			out := fmt.Sprint("FILTER ( ?obj", rN, " = ", p.hasValue.String(), " )\n")
 			innerWhereStatements = append(innerWhereStatements, out)
 		}
+
+		outputAttributes = append(outputAttributes, pathOutputs...)
 
 		// outputWhereStatements = append(outputWhereStatements, tb.String())
 

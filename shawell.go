@@ -140,6 +140,13 @@ func main() {
 
 	for k, v := range invalidTargets {
 		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(5))
+
+		var nodes []string = v.GetColumn(0)
+		query := parsedDoc.shapeNames[k].WitnessQuery(nodes)
+
+		// fmt.Println("Witness query on targets: ", endpoint.Query(query).Limit(10))
+
+		fmt.Println("Witness query on targets:\n\n ", query)
 	}
 
 	// nodes := []string{"<https://dbpedia.org/resource/V41>", "<https://dbpedia.org/resource/V19>"}

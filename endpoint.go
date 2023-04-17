@@ -20,6 +20,16 @@ func (t Table) String() string {
 	return t.Limit(len(t.content))
 }
 
+func (t Table) GetColumn(column int) []string {
+	var out []string
+
+	for i := range t.content {
+		out = append(out, t.content[i][column].String())
+	}
+
+	return out
+}
+
 func (t Table) Limit(n int) string {
 	if n > len(t.content) {
 		n = len(t.content)
