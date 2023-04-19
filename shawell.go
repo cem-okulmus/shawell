@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/deiu/rdf2go"
+	rdf "github.com/deiu/rdf2go"
 )
 
 func check(e error) {
@@ -18,8 +18,8 @@ func check(e error) {
 	}
 }
 
-func res(s string) rdf2go.Term {
-	return rdf2go.NewResource(s)
+func res(s string) rdf.Term {
+	return rdf.NewResource(s)
 }
 
 // making it easier to define proper terms
@@ -37,6 +37,16 @@ func abbr(in string) string {
 	in = strings.ReplaceAll(in, rdfs, "rdfs:")
 
 	return in
+}
+
+func abbrAll(in []string) []string {
+	var out []string
+
+	for i := range in {
+		out = append(out, abbr(in[i]))
+	}
+
+	return out
 }
 
 var ResA = res(rdfs + "type")
@@ -74,7 +84,7 @@ func main() {
 	carwheel, err := os.Open("resources/carwheel.ttl")
 	check(err)
 
-	g := rdf2go.NewGraph(baseUri)
+	g := rdf.NewGraph(baseUri)
 
 	g.Parse(carwheel, "text/turtle")
 
@@ -82,10 +92,10 @@ func main() {
 
 	// fmt.Println("here are all triples with 'hasPart' as the role:", len(triple))
 	// fmt.Println("Here is a turtle RDF graph: ", g.Len())
-	shaclDoc, err := os.Open("resources/carwheel_constraints_nonrecursive_v2.ttl")
+	shaclDoc, err := os.Open("resources/carwheel_constraints_nonrecursive.ttl")
 	check(err)
 
-	g2 := rdf2go.NewGraph(sh)
+	g2 := rdf.NewGraph(sh)
 	g2.Parse(shaclDoc, "text/turtle")
 	// fmt.Println("Here is a turtle RDF graph: ", abbr(g2.String()), g2.Len())
 
@@ -115,7 +125,7 @@ func main() {
 	// fmt.Println("CondAnswers for ",
 	// 	sh+"Car1Shape", "  : ", parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
 
-	fmt.Println("Query for WheelShape: \n", parsedDoc.shapeNames[sh+"Car1Shape"].ToSparql())
+	fmt.Println("Query for Car1Shape: \n", parsedDoc.shapeNames[sh+"Car1Shape"].ToSparql())
 	// fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ",
 	// 	parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
 
@@ -134,19 +144,39 @@ func main() {
 	// fmt.Println("Invalid Targets of CarShape ",
 	// 	parsedDoc.InvalidTargets(sh+"CarShape", endpoint).Limit(5))
 
-	res, invalidTargets := parsedDoc.Validate(endpoint)
+	res, invalidTargets, expMap := parsedDoc.Validate(endpoint)
 
 	fmt.Println("Shacl Document valid: ", res)
 
+	// print all shapes
+	for k, v := range parsedDoc.uncondAnswers {
+
+		fmt.Println("Shape ", k)
+		fmt.Println(v)
+
+	}
+
 	for k, v := range invalidTargets {
-		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(5))
+		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.String())
 
-		var nodes []string = v.GetColumn(0)
-		query := parsedDoc.shapeNames[k].WitnessQuery(nodes)
+		fmt.Println("For node shape: ", k, " -- Explanations: ")
+		for _, s := range expMap[k] {
+			fmt.Println(s)
+		}
 
-		// fmt.Println("Witness query on targets: ", endpoint.Query(query).Limit(10))
+		// var nodes []string = v.GetColumn(0)
 
-		fmt.Println("Witness query on targets:\n\n ", query)
+		// targets, explanation := parsedDoc.InvalidTargetsWithExplanation(name, endpoint)
+
+		// if k != sh+"WheelShape" { // extend Get Failure Witness to give proper answers based on dep
+		// 	for _, n := range nodes {
+		// 		fmt.Println(parsedDoc.FindReferentialFailureWitness(k, n))
+		// 	}
+		// } else {
+		// 	fmt.Print("Witness query on targets: \n", endpoint.Query(query).Limit(10))
+		// }
+
+		// fmt.Println("Witness query on targets:\n\n ", query)
 	}
 
 	// nodes := []string{"<https://dbpedia.org/resource/V41>", "<https://dbpedia.org/resource/V19>"}

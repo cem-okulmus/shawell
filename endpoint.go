@@ -3,9 +3,10 @@ package main
 import (
 	"fmt"
 	"strings"
+	"text/tabwriter"
 	"time"
 
-	"github.com/deiu/rdf2go"
+	rdf "github.com/deiu/rdf2go"
 	"github.com/knakk/sparql"
 )
 
@@ -13,7 +14,7 @@ import (
 
 type Table struct {
 	header  []string
-	content [][]rdf2go.Term
+	content [][]rdf.Term
 }
 
 func (t Table) String() string {
@@ -30,34 +31,52 @@ func (t Table) GetColumn(column int) []string {
 	return out
 }
 
+func (t Table) FindRow(column int, value string) (int, bool) {
+	var found bool
+	var foundRow int
+
+	for i := range t.content {
+		if t.content[i][column].String() == value {
+			foundRow = i
+			found = true
+			break
+		}
+	}
+
+	return foundRow, found
+}
+
 func (t Table) Limit(n int) string {
 	if n > len(t.content) {
 		n = len(t.content)
 	}
 	var sb strings.Builder
+	const padding = 4
+	w := tabwriter.NewWriter(&sb, 0, 0, padding, ' ', tabwriter.TabIndent)
 
-	sb.WriteString(fmt.Sprintln(t.header))
+	fmt.Fprint(w, "\n", strings.Join(t.header, "\t"), "\t\n")
 
 	for i := range t.content[:n] {
+
 		for j := range t.content[i] {
-			sb.WriteString(fmt.Sprint(t.content[i][j]))
-			if j <= len(t.content[i])-1 {
-				sb.WriteString("\t")
-			}
+			fmt.Fprint(w, abbr(t.content[i][j].String()))
+			fmt.Fprint(w, "\t ")
 		}
-		sb.WriteString("\n")
+		fmt.Fprint(w, "\n")
 	}
 
 	if n < len(t.content) {
-		sb.WriteString(fmt.Sprint("\t\t⋮ (showing first ",
-			n, " lines from ", len(t.content), " total) \n"))
+		fmt.Fprint(w, "\n\n\t\t⋮ (showing first ",
+			n, " lines from ", len(t.content), " total) \n")
 	}
 
+	err := w.Flush()
+	check(err)
 	return sb.String()
 }
 
 func GetTable(r *sparql.Results) Table {
-	var resultTable [][]rdf2go.Term
+	var resultTable [][]rdf.Term
 
 	var ordering map[string]int = make(map[string]int)
 
@@ -66,7 +85,7 @@ func GetTable(r *sparql.Results) Table {
 	}
 
 	for _, t := range r.Solutions() {
-		var tupleOrdered []rdf2go.Term = make([]rdf2go.Term, len(t))
+		var tupleOrdered []rdf.Term = make([]rdf.Term, len(t))
 
 		for k, v := range t {
 			tupleOrdered[ordering[k]] = res(v.String()) // needed since range over map unsorted
@@ -111,6 +130,8 @@ func (s SparqlEndpoint) Query(query string) Table {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query)
 	check(err)
+
+	// fmt.Println("Query:  \n", query)
 
 	return GetTable(res)
 }

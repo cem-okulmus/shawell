@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/deiu/rdf2go"
+	rdf "github.com/deiu/rdf2go"
 	"github.com/fatih/color"
 )
 
@@ -16,13 +16,13 @@ import (
 // PropertyConstraint expresses contstraints on properties that go out
 // from the target node.
 type PropertyConstraint struct {
-	path     rdf2go.Term // the outgoing property that is being restricted
-	inverse  bool        // indicates that the path is inverted
-	class    rdf2go.Term // restrict the target to a class
-	hasValue rdf2go.Term // restricts to the specified value
-	node     rdf2go.Term // restrict the target to a shape
-	minCount int         // 0 treated as non-defined
-	maxCount int         // 0 treated as non-defined
+	path     rdf.Term // the outgoing property that is being restricted
+	inverse  bool     // indicates that the path is inverted
+	class    rdf.Term // restrict the target to a class
+	hasValue rdf.Term // restricts to the specified value
+	node     rdf.Term // restrict the target to a shape
+	minCount int      // 0 treated as non-defined
+	maxCount int      // 0 treated as non-defined
 }
 
 func (p PropertyConstraint) String() string {
@@ -56,7 +56,7 @@ type TargetExpression interface {
 }
 
 type TargetClass struct {
-	class rdf2go.Term // the class that is being targeted
+	class rdf.Term // the class that is being targeted
 }
 
 func (t TargetClass) String() string {
@@ -64,7 +64,7 @@ func (t TargetClass) String() string {
 }
 
 type TargetObjectsOf struct {
-	path rdf2go.Term // the property the target is the object of
+	path rdf.Term // the property the target is the object of
 }
 
 func (t TargetObjectsOf) String() string {
@@ -72,7 +72,7 @@ func (t TargetObjectsOf) String() string {
 }
 
 type TargetSubjectOf struct {
-	path rdf2go.Term // the property the target is the subject of
+	path rdf.Term // the property the target is the subject of
 }
 
 func (t TargetSubjectOf) String() string {
@@ -80,7 +80,7 @@ func (t TargetSubjectOf) String() string {
 }
 
 type TargetNode struct {
-	node rdf2go.Term // the node that is selected
+	node rdf.Term // the node that is selected
 }
 
 func (t TargetNode) String() string {
@@ -144,9 +144,9 @@ func (n NodeShape) String() string {
 
 // GetNodeShape takes as input and RDF graph and a term signifying a NodeShape
 // and then iteratively queries the RDF graph to extract all its details
-func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependency) {
-	subject := rdf2go.NewResource(name)
-	triples := rdf.All(subject, nil, nil)
+func GetNodeShape(graph *rdf.Graph, name string) (bool, *NodeShape, []dependency) {
+	subject := rdf.NewResource(name)
+	triples := graph.All(subject, nil, nil)
 	var deps []dependency
 	// fmt.Println("Found triples", triples)
 
@@ -182,14 +182,14 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependenc
 		if t.Predicate.Equal(res(sh + "property")) {
 			// fmt.Println("------------fire!-----------", t.Object.String())
 			blank := t.Object
-			propTriples := rdf.All(blank, nil, nil)
+			propTriples := graph.All(blank, nil, nil)
 			// fmt.Println("Found blanks", propTriples)
 			pc := PropertyConstraint{}
 			for _, t2 := range propTriples {
 				switch t2.Predicate.RawValue() {
 				case sh + "path":
 					// check for inverted path
-					out := rdf.One(t2.Object, res(sh+"inversePath"), nil)
+					out := graph.One(t2.Object, res(sh+"inversePath"), nil)
 
 					if out == nil {
 						pc.path = t2.Object
@@ -222,7 +222,7 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependenc
 		if t.Predicate.Equal(res(sh + "and")) {
 			blank := t.Object
 
-			listTriples := rdf.All(blank, nil, nil)
+			listTriples := graph.All(blank, nil, nil)
 			for _, t2 := range listTriples {
 				if !t2.Object.Equal(res(rdfs + "nil")) {
 					positives = append(positives, t2.Object.RawValue())
@@ -234,7 +234,7 @@ func GetNodeShape(rdf *rdf2go.Graph, name string) (bool, *NodeShape, []dependenc
 		if t.Predicate.Equal(res(sh + "not")) {
 			// check if object blank (if so, we need to parse a non-named shape)
 			switch t.Object.(type) {
-			case rdf2go.BlankNode:
+			case rdf.BlankNode:
 				// TODO
 				panic("complex NOT expressions not yet implemented!")
 			default:
@@ -323,7 +323,6 @@ func (n NodeShape) ToSparql() string {
 					tb.WriteString(fmt.Sprint("FILTER ( ", p.minCount, " <= ?countObj", rN, ")"))
 				}
 			}
-
 		} else {
 
 			nonEmpty = true
@@ -346,10 +345,8 @@ func (n NodeShape) ToSparql() string {
 				} else {
 					tb.WriteString(fmt.Sprint("FILTER ( ", p.minCount, " <= ?countObj", rN, ")"))
 				}
-
 			}
 			usedPaths = append(usedPaths, p.path.String()) // adding to list of encountered
-
 		}
 
 		if p.class != nil {
@@ -380,7 +377,6 @@ func (n NodeShape) ToSparql() string {
 	if !nonEmpty {
 		triple := "?sub ?pred ?obj .\n"
 		outputWhereStatements = append(outputWhereStatements, triple)
-
 	}
 
 	// buildling the SELECT line
@@ -411,7 +407,6 @@ func (n NodeShape) ToSparql() string {
 // query that is output in the method ToSparql()
 func (n NodeShape) WitnessQuery(nodes []string) string {
 	var sb strings.Builder
-	nonEmpty := false // used to deal with strange "empty" constraints
 
 	sb.WriteString("PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \n")
 	sb.WriteString("PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> \n")
@@ -442,7 +437,6 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 		var innerOutputAttributes []string
 		var innerWhereStatements []string
 
-		nonEmpty = false
 		// check if counting constraints present or not
 		var tb strings.Builder
 		var tb2 strings.Builder
@@ -452,7 +446,6 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 		tb.WriteString(o)
 
 		if p.inverse {
-			nonEmpty = true
 			tb2.WriteString(fmt.Sprint("?obj", rN, " ", p.path.String(), " ?sub .\n\t"))
 
 			if p.minCount != 0 || p.maxCount != 0 {
@@ -466,12 +459,9 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 				tb2.WriteString(fmt.Sprint("GROUP BY ?InnerPred", rN, " ?InnerObj", rN, "\n\t"))
 				tb2.WriteString("}\n\t")
 				tb2.WriteString(fmt.Sprint("FILTER (?InnerObj", rN, " = ?sub)\n"))
-
 			}
 
 		} else {
-
-			nonEmpty = true
 			tb2.WriteString(fmt.Sprint("?sub ", p.path.String(), " ?obj", rN, " .\n\t"))
 
 			if p.minCount != 0 || p.maxCount != 0 {
@@ -488,7 +478,6 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 
 			}
 			usedPaths = append(usedPaths, p.path.String()) // adding to list of encountered
-
 		}
 		innerWhereStatements = append(innerWhereStatements, tb2.String())
 
@@ -500,7 +489,20 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 		// innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("(?obj", rN, " AS ?ValueWitness,", rN, ")"))
 
 		if p.minCount != 0 || p.maxCount != 0 {
-			pathOutputs = append(pathOutputs, fmt.Sprint("( ?countObj", rN, " AS ?CountWitness", rN, " ) "))
+			var o string
+			if p.maxCount != 0 {
+				o = fmt.Sprint("COALESCE(",
+					" IF(?countObj", rN, " < ", p.minCount, ", 1/0, ",
+					" IF(?countObj", rN, " > ", p.maxCount, ", 1/0, \"Object count matches constraint\" ))",
+					",\"Violation: Object count for path", rN, " not matching requirement.\")")
+			} else {
+				o = fmt.Sprint("COALESCE(",
+					" IF(?countObj", rN, " < ", p.minCount, ", 1/0, \"Object count matches constraint\" )",
+					",\"Violation: Object count for path", rN, " not matching requirement.\")")
+			}
+			// pathOutputs = append(pathOutputs, o)
+			pathOutputs = append(pathOutputs, fmt.Sprint("(", o, " AS ?CountWitness", rN, " ) "))
+
 			pathOutputs = append(pathOutputs, fmt.Sprint("( ?listObjs", rN, " AS ?listWitness", rN, " ) "))
 			innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("?countObj", rN, " "))
 			innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("?listObjs", rN, " "))
@@ -508,14 +510,14 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 		if p.class != nil {
 
 			pathOutputs = append(pathOutputs, fmt.Sprint("( COALESCE(?obj", rN,
-				", \"No node of class ", p.class.String(), "\") AS ?ClassWitness", rN, " ) "))
+				", \"No ", p.path, "-connected node of class ", p.class.String(), "\") AS ?ClassWitness", rN, " ) "))
 			out := fmt.Sprint("?obj", rN, " rdf:type/rdfs:subClassOf* ", p.class.String(), " .\n")
 			innerWhereStatements = append(innerWhereStatements, out)
 		}
 		if p.hasValue != nil {
 
 			pathOutputs = append(pathOutputs, fmt.Sprint("( COALESCE(?obj", rN,
-				", \"No node of value ", p.hasValue.String(), "\") AS ?ClassWitness", rN, " ) "))
+				", \"Violation: No ", p.path, "-connected node of value ", p.hasValue.String(), "\") AS ?ClassWitness", rN, " ) "))
 			out := fmt.Sprint("FILTER ( ?obj", rN, " = ", p.hasValue.String(), " )\n")
 			innerWhereStatements = append(innerWhereStatements, out)
 		}
@@ -533,11 +535,6 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 
 		rN++
 	}
-	if !nonEmpty {
-		triple := "?sub ?pred ?obj .\n"
-		outputWhereStatements = append(outputWhereStatements, triple)
-
-	}
 
 	// Building the line for closedness condition
 	if n.closed {
@@ -549,7 +546,8 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 		tb.WriteString(" )) } } FILTER(?subcorrel = ?sub) } \n\n")
 
 		outputWhereStatements = append(outputWhereStatements, tb.String())
-		outputAttributes = append(outputAttributes, "(?closednessWitness as ?clos) ")
+		o := "(COALESCE(?closednessWitness,\"Closed constraint satisifed.\") as ?clos) "
+		outputAttributes = append(outputAttributes, o)
 	}
 
 	// buildling the SELECT line
@@ -568,8 +566,68 @@ func (n NodeShape) WitnessQuery(nodes []string) string {
 	return sb.String()
 }
 
+// FindWitnessQueryFailures returns for a given list of nodes, a list of explanations
+// why they fail validation against the shape, and a boolean whether there is at least one node
+// which does seem to satisfy the witness query
+func (s ShaclDocument) FindWitnessQueryFailures(shape string, nodes []string, ep endpoint) ([]string, bool) {
+	// if !s.validated {
+	// 	log.Panicln("Cannot call FindWitnessQueryFailures before validation")
+	// }
+
+	query := s.shapeNames[shape].WitnessQuery(nodes)
+	witTable := ep.Query(query)
+
+	var nodeMap map[string]*struct{} = make(map[string]*struct{})
+
+	for i := range nodes {
+		nodeMap[nodes[i]] = nil
+	}
+
+	// check  if we got a result for every node
+	if len(witTable.content) != len(nodes) {
+		log.Panicln("Witness query did not return a line for every checked node: ",
+			len(witTable.content), " instead of ", len(nodes))
+	}
+
+	var answers []string
+	metAll := false // indicates that there is a node that does meet all constraints
+
+	for i := range witTable.content {
+		node := witTable.content[i][0].String()
+		_, ok := nodeMap[node]
+		if !ok {
+			log.Panicln("Found a non-matching node in witness result ",
+				"node: ", node, " list of nodes: ", nodes)
+		}
+		violationFound := false
+
+		var violations []string
+
+		// look for violations in other columns
+
+		for j := range witTable.content[i][1:] {
+			text := witTable.content[i][j].RawValue()
+
+			if strings.HasPrefix(text, "Violation") {
+				violationFound = true
+				violations = append(violations, text)
+			}
+		}
+		if !violationFound {
+			metAll = true
+		} else {
+			answers = append(answers, fmt.Sprint("For node ", node, ": ",
+				strings.Join(violations, "; "), "."))
+		}
+
+	}
+
+	return answers, metAll
+}
+
 type dependency struct {
 	name      string // the name of the shape something depends on
+	object    string // the name of the object used in the reference
 	negative  bool   //  to look for the presence or instead for the absence of a shape
 	extrinsic bool   // whether the dependency is on the shape of another node (extrinsic), or
 	// instead if it is on the current node also (not) being of a certain other shape (intrinsic)
@@ -583,6 +641,7 @@ type ShaclDocument struct {
 	uncondAnswers map[string]Table        // caches the results from unwinding
 	targets       map[string]Table        // caches for targets
 	answered      bool
+	validated     bool
 }
 
 func (s ShaclDocument) String() string {
@@ -598,10 +657,8 @@ func (s ShaclDocument) String() string {
 
 		var c *color.Color
 
-		rec, unwoundDeps := s.TransitiveClosure(k)
-		if !rec {
-			v = unwoundDeps
-		}
+		rec, _ := s.TransitiveClosure(k)
+
 		for _, d := range v {
 
 			if d.negative {
@@ -626,13 +683,12 @@ func (s ShaclDocument) String() string {
 				sb.WriteString(fmt.Sprint(k, " depends on ", sb2.String(), ". \n"))
 			}
 		}
-
 	}
 
 	return abbr(sb.String())
 }
 
-func GetShaclDocument(rdf *rdf2go.Graph) (bool, ShaclDocument) {
+func GetShaclDocument(rdf *rdf.Graph) (bool, ShaclDocument) {
 	var out ShaclDocument
 	var detected bool = true
 	out.shapeNames = make(map[string]*NodeShape)
@@ -658,8 +714,7 @@ func GetShaclDocument(rdf *rdf2go.Graph) (bool, ShaclDocument) {
 			panic("Two NodeShapes with same name, NodeShapes must be unique!")
 		}
 
-		out.shapeNames[name] = ns // add a reference to newly extracted shape
-
+		out.shapeNames[name] = ns   // add a reference to newly extracted shape
 		out.dependency[name] = deps // add the dependencies
 	}
 
@@ -667,7 +722,7 @@ func GetShaclDocument(rdf *rdf2go.Graph) (bool, ShaclDocument) {
 }
 
 // mem checks if an integer b occurs inside a slice as
-func mem(aas [][]rdf2go.Term, b rdf2go.Term) bool {
+func mem(aas [][]rdf.Term, b rdf.Term) bool {
 	for _, as := range aas {
 		for _, a := range as {
 			if a.Equal(b) {
@@ -680,7 +735,7 @@ func mem(aas [][]rdf2go.Term, b rdf2go.Term) bool {
 }
 
 // memList returns true, if any one element is included
-func memList(aas [][]rdf2go.Term, b rdf2go.Term) bool {
+func memList(aas [][]rdf.Term, b rdf.Term) bool {
 	elements := strings.Split(b.RawValue(), " ")
 
 	for _, e := range elements {
@@ -694,7 +749,7 @@ func memList(aas [][]rdf2go.Term, b rdf2go.Term) bool {
 }
 
 // memList returns true, if all elements are included
-func memListAll(aas [][]rdf2go.Term, b rdf2go.Term) bool {
+func memListAll(aas [][]rdf.Term, b rdf.Term) bool {
 	elements := strings.Split(b.RawValue(), " ")
 
 	for _, e := range elements {
@@ -747,15 +802,6 @@ func RemoveDuplicates(elements []string) []string {
 	return elements[:j+1]
 }
 
-// func flatten(content [][]rdf2go.Term) []rdf2go.Term {
-// 	var out []rdf2go.Term
-
-// 	for i := range content
-// 		for j := range content[i][j] {
-// 			out =
-// 		}
-// }
-
 // UnwindDependencies computes the trans. closure of deps among node shapes
 func (s ShaclDocument) TransitiveClosure(name string) (bool, []dependency) {
 	var out1, out2 []dependency
@@ -796,12 +842,12 @@ func (s ShaclDocument) ToSparql() []string {
 	return output
 }
 
-func remove(s [][]rdf2go.Term, i int) [][]rdf2go.Term {
+func remove(s [][]rdf.Term, i int) [][]rdf.Term {
 	s[i] = s[len(s)-1]
 	return s[:len(s)-1]
 }
 
-// func remove(slice [][]rdf2go.Term, s int) [][]rdf2go.Term {
+// func remove(slice [][]rdf.Term, s int) [][]rdf.Term {
 // 	return append(slice[:s], slice[s+1:]...)
 // }
 
@@ -911,7 +957,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 					uncondTable.content = remove(uncondTable.content, i)
 				}
 			} else { // inversely, for positive deps we only keep the affected  indices
-				var temp [][]rdf2go.Term
+				var temp [][]rdf.Term
 				for _, i := range affectedIndices {
 					temp = append(temp, uncondTable.content[i])
 				}
@@ -939,6 +985,85 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 	}
 
 	return s.uncondAnswers[name]
+}
+
+// FindReferentialFailureWitness produces a sentence explaining why the node does not fulfill the
+// referential constraints in the node shape. This does not cover any non-referential constraints
+// otherwise expressed in the node. (Future TODO to add that here too via Witness queries)
+func (s *ShaclDocument) FindReferentialFailureWitness(shape, node string) (string, bool) {
+	// if !s.validated {
+	// 	log.Panicln("Cannot call FindReferentialFailureWitness before validation.")
+	// }
+
+	_, ok := s.shapeNames[shape]
+	if !ok {
+		log.Panicln("Provided shape ", shape, " does not exist in this Shacl document.")
+	}
+	deps := s.dependency[shape]
+
+	var metDep []bool
+	var objNames []string
+	unmet := false
+
+	condAns := s.condAnswers[shape]
+
+	index, found := condAns.FindRow(0, node)
+	if !found {
+		return "", false
+	}
+
+	row := condAns.content[index]
+
+	for i, d := range deps {
+
+		// determine the column
+		headIndex := 0
+		if d.extrinsic {
+
+			headerFound := false
+			for j, h := range condAns.header {
+				if strings.HasPrefix(h, d.name[len(sh):]) {
+					headIndex = j
+					headerFound = true
+				}
+			}
+			if !headerFound {
+				fmt.Println("\n header: ", condAns.header)
+				log.Panicln("For node, ", node, " cannot find the respect column in condAnswers for  ", d.name)
+			}
+
+		} else {
+			headIndex = 0
+		}
+
+		metDep = append(metDep, false)
+		objNames = append(objNames, "")
+
+		depTable := s.uncondAnswers[d.name]
+
+		if d.negative {
+			metDep[i] = !mem(depTable.content, res(node[1:len(node)-1]))
+		} else {
+			metDep[i] = mem(depTable.content, res(node[1:len(node)-1]))
+		}
+		if !metDep[i] {
+			// find the offending object name
+			objNames[i] = row[headIndex].String()
+			unmet = true
+		}
+	}
+
+	var answers []string
+
+	for i := range metDep {
+		if !metDep[i] && deps[i].negative {
+			answers = append(answers, objNames[i]+" does have shape "+deps[i].name)
+		} else if !metDep[i] {
+			answers = append(answers, objNames[i]+" does not have shape "+deps[i].name)
+		}
+	}
+
+	return abbr(fmt.Sprint("For ", node, ": ", strings.Join(answers, ", and "), ".")), unmet
 }
 
 func (s *ShaclDocument) GetTargets(name string, ep endpoint) Table {
@@ -1035,18 +1160,18 @@ func (s *ShaclDocument) GetTargets(name string, ep endpoint) Table {
 
 // InvalidTargets compares the targets of a node shape against the decorated graph and
 // returns those targets that do not have this shape
-func (s *ShaclDocument) InvalidTargets(name string, ep endpoint) Table {
+func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) Table {
 	var out Table
 
 	if !s.answered {
 		s.AllCondAnswers(ep)
 	}
 
-	nodesWithShape := s.UnwindAnswer(name)
+	nodesWithShape := s.UnwindAnswer(shape)
 	// fmt.Println("Answers: ", len(nodesWithShape.content))
 
-	targets := s.GetTargets(name, ep)
-	out.header = append(out.header, "Not "+name[len(sh):])
+	targets := s.GetTargets(shape, ep)
+	out.header = append(out.header, "Not "+shape[len(sh):])
 
 outer:
 	for _, t := range targets.content {
@@ -1063,21 +1188,63 @@ outer:
 	return out
 }
 
+// InvalidTargetsWithExplanation returns the targets that do not match the shape they are supposed
+// to, but in addition to that, also returns an explanation in the form of a witness table.
+func (s *ShaclDocument) InvalidTargetsWithExplanation(shape string, ep endpoint) (Table, []string) {
+	var explanation []string
+	results := s.InvalidTargets(shape, ep)
+
+	var remaining []string
+
+	// 1st look for refential explanations
+	for i := range results.content {
+		if len(results.content[i]) != 1 {
+			log.Panicln("Resuls table not a unary relation.")
+		}
+
+		node := results.content[i][0].String()
+
+		refExp, unmet := s.FindReferentialFailureWitness(shape, node)
+
+		// look for answers from witness query instead
+		if !unmet {
+			remaining = append(remaining, node)
+		} else {
+			explanation = append(explanation, refExp)
+		}
+
+	}
+
+	integExp, unmet2 := s.FindWitnessQueryFailures(shape, remaining, ep)
+
+	// fail if there are still invalid targets left (indicating a problem in validation)
+	if len(remaining) > 0 && unmet2 {
+		log.Panic("There are still remaining invalid targets, without explanations!",
+			"	remaining: ", remaining, " Exps so far: ", integExp, "\n\n refExps so far:", explanation)
+	}
+	explanation = append(explanation, integExp...)
+	return results, explanation
+}
+
 // Validate checks for each of the node shapes of a SHACL document, whether their target nodes
 // occur in the decorated graph with the shapes they are supposed to. If not, it returns false
 // as well as list of tables for each node shape of the nodes that fail validation.
-func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table) {
+func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table, map[string][]string) {
 	var out map[string]Table = make(map[string]Table)
+	var outExp map[string][]string = make(map[string][]string)
 	var result bool = true
 
 	// Produce InvalidTargets for each node shape
 	for i := range s.nodeShapes {
-		invalidTargets := s.InvalidTargets(s.nodeShapes[i].name, ep)
+		invalidTargets, explanations := s.InvalidTargetsWithExplanation(s.nodeShapes[i].name, ep)
 		if len(invalidTargets.content) > 0 {
 			out[s.nodeShapes[i].name] = invalidTargets
+			outExp[s.nodeShapes[i].name] = abbrAll(explanations)
 			result = false
 		}
 	}
 
-	return result, out
+	s.validated = true
+
+	return result, out, outExp
 }
