@@ -7,15 +7,10 @@
 <https://dbpedia.org/resource/V0w2> <https://dbpedia.org/ontology/shape> <https://dbpedia.org/resource/Circle>.
 <https://dbpedia.org/resource/V0> <https://dbpedia.org/ontology/part> <https://dbpedia.org/resource/V0w3>.
 <https://dbpedia.org/resource/V0w3> <https://dbpedia.org/ontology/shape> <https://dbpedia.org/resource/Circle>.
-<https://dbpedia.org/resource/V0> <https://dbpedia.org/ontology/part> <https://dbpedia.org/resource/V0w4>.
-<https://dbpedia.org/resource/V0w4> <https://dbpedia.org/ontology/shape> <https://dbpedia.org/resource/Circle>.
-<https://dbpedia.org/resource/V0> <https://dbpedia.org/ontology/part> <https://dbpedia.org/resource/V0w5>.
-<https://dbpedia.org/resource/V0w5> <https://dbpedia.org/ontology/shape> <https://dbpedia.org/resource/Circle>.
-<https://dbpedia.org/resource/V0> <https://dbpedia.org/ontology/part> <https://dbpedia.org/resource/P0_0>.
-<https://dbpedia.org/resource/V0> <https://dbpedia.org/ontology/part> <https://dbpedia.org/resource/P1_0>.
 <https://dbpedia.org/resource/V1> a <https://dbpedia.org/resource/Vehicle>.
 <https://dbpedia.org/resource/V1> <https://dbpedia.org/ontology/part> <https://dbpedia.org/resource/V1w0>.
 <https://dbpedia.org/resource/V1w0> <https://dbpedia.org/ontology/shape> <https://dbpedia.org/resource/Circle>.
+<https://dbpedia.org/resource/V1w0> <https://dbpedia.org/ontology/shape> <https://dbpedia.org/resource/Circle2>.
 <https://dbpedia.org/resource/V1> <https://dbpedia.org/ontology/part> <https://dbpedia.org/resource/V1w1>.
 <https://dbpedia.org/resource/V1w1> <https://dbpedia.org/ontology/shape> <https://dbpedia.org/resource/Circle>.
 <https://dbpedia.org/resource/V1> <https://dbpedia.org/ontology/part> <https://dbpedia.org/resource/P0_1>.

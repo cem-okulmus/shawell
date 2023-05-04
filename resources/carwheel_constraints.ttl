@@ -7,16 +7,16 @@ sh:Car1Shape
 	a sh:NodeShape ;
 	sh:property [			
 		sh:path dbo:part ;
-        sh:node sh:WheelShape;
-		sh:minCount 4 ;
+		sh:qualifiedValueShape sh:WheelShape;
+		sh:qualifiedMinCount 4;
 	] .
 
 sh:Car2Shape
 	a sh:NodeShape ;
 	sh:property [			
 		sh:path dbo:part ;
-        sh:node sh:WheelShape;
-		sh:minCount 5 ;
+		sh:qualifiedValueShape sh:WheelShape;
+		sh:qualifiedMinCount 5;
 	] .
 
 sh:CarShape

@@ -98,7 +98,7 @@ func GetTable(r *sparql.Results) Table {
 }
 
 type endpoint interface {
-	Answer(ns *NodeShape) Table
+	Answer(ns *Shape) Table
 	Query(s string) Table
 }
 
@@ -117,9 +117,9 @@ func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
 }
 
 // Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
-func (s SparqlEndpoint) Answer(ns *NodeShape) Table {
-	query := ns.ToSparql()
-	res, err := s.repo.Query(query)
+func (s SparqlEndpoint) Answer(ns *Shape) Table {
+	query := (*ns).ToSparql()
+	res, err := s.repo.Query(query.String())
 	check(err)
 
 	return GetTable(res)

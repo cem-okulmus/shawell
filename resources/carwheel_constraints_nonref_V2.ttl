@@ -5,21 +5,18 @@
 
 
 sh:CarShape
-	a sh:NodeShape ;
-	sh:targetClass dbr:Vehicle ;
-	sh:property [			
-		sh:path dbo:part ;
-		sh:minCount 4 ;
-		sh:maxCount 4;
-	] ;
-	sh:deactivated true.
+	a sh:PropertyShape ;
+	sh:targetClass dbr:Vehicle ;	
+	sh:path dbo:part ;
+	sh:minCount 4 ;
+	sh:maxCount 4 .
 
 sh:WheelShape
 	a sh:NodeShape ;
 	sh:targetObjectsOf dbo:part ; 
 	sh:property [
 		sh:path dbo:shape ;
-		sh:in (dbr:Circle) ; 
+		sh:hasValue dbr:Circle ; 
 	] ;
-	sh:closed false ;
-	sh:deactivated false .
+	sh:closed true ;	
+	sh:deactivated true .

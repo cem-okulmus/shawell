@@ -5,8 +5,12 @@
 package main
 
 import (
+	"bufio"
+	"flag"
 	"fmt"
+	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	rdf "github.com/deiu/rdf2go"
@@ -22,19 +26,72 @@ func res(s string) rdf.Term {
 	return rdf.NewResource(s)
 }
 
+var prefixes map[string]string = make(map[string]string)
+
 // making it easier to define proper terms
 var (
-	sh   = "http://www.w3.org/ns/shacl#"
-	dbo  = "https://dbpedia.org/ontology/"
-	dbr  = "https://dbpedia.org/resource/"
-	rdfs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+	_sh   = "http://www.w3.org/ns/shacl#"
+	_dbo  = "https://dbpedia.org/ontology/"
+	_dbr  = "https://dbpedia.org/resource/"
+	_rdf  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+	_rdfs = "http://www.w3.org/2000/01/rdf-schema#"
 )
 
+func GetNameSpace(file *os.File) {
+	// call the Seek method first
+	_, err := file.Seek(0, io.SeekStart)
+	check(err)
+
+	scanner := bufio.NewScanner(file)
+	validID := regexp.MustCompile(`<.*?>`)
+
+	// iterate over each line in the file
+	for scanner.Scan() {
+		line := scanner.Text()
+		ps := "@prefix "
+		if strings.HasPrefix(line, ps) {
+			abbr, _ := strings.CutPrefix(line, ps)
+			getStart := 0
+			abbrOut := ""
+			for i, c := range abbr {
+				if c == ':' {
+					getStart = i
+					break
+				}
+			}
+			abbrOut = abbr[:getStart+1]
+			fullPath := validID.FindString(line)
+			_, ok := prefixes[abbrOut]
+			if !ok {
+				prefixes[abbrOut] = fullPath[1 : len(fullPath)-1]
+			}
+		}
+	}
+}
+
 func abbr(in string) string {
-	in = strings.ReplaceAll(in, sh, "sh:")
-	in = strings.ReplaceAll(in, dbo, "dbo:")
-	in = strings.ReplaceAll(in, dbr, "dbr:")
-	in = strings.ReplaceAll(in, rdfs, "rdfs:")
+	for k, v := range prefixes {
+		in = strings.ReplaceAll(in, v, k)
+	}
+
+	// in = strings.ReplaceAll(in, _dbo, "dbo:")
+	// in = strings.ReplaceAll(in, _dbr, "dbr:")
+	// in = strings.ReplaceAll(in, _rdf, "rdf:")
+
+	return in
+}
+
+func removeAbbr(in string) string {
+	for _, v := range prefixes {
+		new, found := strings.CutPrefix(in, v)
+		if found {
+			return new
+		}
+	}
+
+	// in = strings.ReplaceAll(in, _dbo, "dbo:")
+	// in = strings.ReplaceAll(in, _dbr, "dbr:")
+	// in = strings.ReplaceAll(in, _rdf, "rdf:")
 
 	return in
 }
@@ -49,7 +106,7 @@ func abbrAll(in []string) []string {
 	return out
 }
 
-var ResA = res(rdfs + "type")
+var ResA = res(_rdf + "type")
 
 // Done:
 //  *  get a better understanding of SHACL documents
@@ -66,9 +123,33 @@ var ResA = res(rdfs + "type")
 //            + sh:minCount, sh:maxCount
 //      - sh:and  & sh:not support
 //      - sh:targetClass & sh:targetObjectOf support
-//
+// * support more of basic SHACL
+//   - (if it comes in tests) explicit property shapes
+//   - sh:name
+//   - sh:datatype
+//   - sh:pattern (reg expressions sigh)
+//   - sh:nodeKind
+//   - sh:alternativePath
+//   - sh:zeroOrMorePath (plus all these related ones)
+//   - sh:in
+//   - sh:equals, disjoint, lessThan, lessThanOrEquals
+//   - sh:minLength, sh:maxLength, sh:languageIn, sh:uniqueLang
+//   - sh:minExclusive, sh:maxExclusive, sh:minInclusive, sh:maxInclusive//
 
 // TODO:
+// * support more of basic SHACL
+//   - sh:qualifiedValue (min + max)
+//   - sh:ignoredProperties (for sh:closed)
+//   - sh:closed
+//   - sh:xone
+//   - sh:or
+
+//  * Produce proper validation reports in RDF
+//   - support severity
+//   - result message
+//   - the various properties (value, source, path, focus, constraint)
+//  * deactivating a shape (should be easy)
+
 // * consider actual benchmarks to cover, before developing further towards integration with dlv
 // * implement rewriting of conditional answers into logic programs
 // * implement integration with dlv:
@@ -77,36 +158,51 @@ var ResA = res(rdfs + "type")
 // * consider if target extraction could not be merged into DLV program, to directly get validation
 // report of sorts
 
+// Parse is used to parse RDF data from a reader, using the provided mime type
+
 func main() {
-	// Set a base URI
-	baseUri := "http://dbpedia.org/ontology"
+	// ==============================================
+	// Command-Line Argument Parsing
 
-	carwheel, err := os.Open("resources/carwheel.ttl")
+	flagSet := flag.NewFlagSet("shawell", flag.ExitOnError)
+
+	// input flags
+	endpointAddress := flagSet.String("endpoint", "", "The URL to a SPARQL endpoint.")
+	shaclDocPath := flagSet.String("shaclDoc", "", "The file path to a SHACL document.")
+
+	flagSet.Parse(os.Args[1:])
+
+	if *endpointAddress == "" || *shaclDocPath == "" {
+		flagSet.Usage()
+		os.Exit(-1)
+	}
+
+	// END Command-Line Argument Parsing
+	// ==============================================
+
+	shaclDoc, err := os.Open(*shaclDocPath)
 	check(err)
 
-	g := rdf.NewGraph(baseUri)
-
-	g.Parse(carwheel, "text/turtle")
-
-	// triple := g.All(nil, res(dbo+"part"), nil)
-
-	// fmt.Println("here are all triples with 'hasPart' as the role:", len(triple))
-	// fmt.Println("Here is a turtle RDF graph: ", g.Len())
-	shaclDoc, err := os.Open("resources/carwheel_constraints_nonrecursive.ttl")
-	check(err)
-
-	g2 := rdf.NewGraph(sh)
+	g2 := rdf.NewGraph(_sh)
 	g2.Parse(shaclDoc, "text/turtle")
-	// fmt.Println("Here is a turtle RDF graph: ", abbr(g2.String()), g2.Len())
 
-	var parsedDoc ShaclDocument
+	GetNameSpace(shaclDoc)
 
-	found, parsedDoc := GetShaclDocument(g2)
-
-	fmt.Println("Found a ShaclDoc: ", found)
+	var parsedDoc ShaclDocument = GetShaclDocument(g2)
 	fmt.Println("The parsed Shacl Doc", parsedDoc.String())
 
-	endpoint := GetSparqlEndpoint("http://localhost:3030/Cartwheel/", "", "")
+	// if len(parsedDoc.nodeShapes) > 0 {
+	// 	fmt.Println("Chosen Shape: ", parsedDoc.nodeShapes[0])
+
+	// 	fmt.Println("\n Sparql Query:")
+	// 	fmt.Print("\n\n")
+
+	// 	query := parsedDoc.nodeShapes[0].ToSparql()
+
+	// 	fmt.Println(query.String())
+	// }
+
+	endpoint := GetSparqlEndpoint(*endpointAddress, "", "")
 
 	// var results []Table
 
@@ -123,9 +219,9 @@ func main() {
 	parsedDoc.AllCondAnswers(endpoint)
 
 	// fmt.Println("CondAnswers for ",
-	// 	sh+"Car1Shape", "  : ", parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
+	// 	_sh+"WheelShape", "  : ", parsedDoc.condAnswers[_sh+"WheelShape"].Limit(5))
 
-	fmt.Println("Query for Car1Shape: \n", parsedDoc.shapeNames[sh+"Car1Shape"].ToSparql())
+	// fmt.Println("Query for Car1Shape: \n", parsedDoc.shapeNames[_sh+"Car1Shape"].ToSparql())
 	// fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ",
 	// 	parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
 
@@ -144,40 +240,41 @@ func main() {
 	// fmt.Println("Invalid Targets of CarShape ",
 	// 	parsedDoc.InvalidTargets(sh+"CarShape", endpoint).Limit(5))
 
-	res, invalidTargets, expMap := parsedDoc.Validate(endpoint)
+	res, invalidTargets := parsedDoc.Validate(endpoint)
 
 	fmt.Println("Shacl Document valid: ", res)
 
-	// print all shapes
-	for k, v := range parsedDoc.uncondAnswers {
+	// // print all shapes
+	// for k, v := range parsedDoc.uncondAnswers {
 
-		fmt.Println("Shape ", k)
-		fmt.Println(v)
+	// 	fmt.Println("Shape ", k)
+	// 	fmt.Println(v.Limit(5))
 
-	}
+	// }
 
 	for k, v := range invalidTargets {
-		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.String())
+		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(5))
 
-		fmt.Println("For node shape: ", k, " -- Explanations: ")
-		for _, s := range expMap[k] {
-			fmt.Println(s)
-		}
-
-		// var nodes []string = v.GetColumn(0)
-
-		// targets, explanation := parsedDoc.InvalidTargetsWithExplanation(name, endpoint)
-
-		// if k != sh+"WheelShape" { // extend Get Failure Witness to give proper answers based on dep
-		// 	for _, n := range nodes {
-		// 		fmt.Println(parsedDoc.FindReferentialFailureWitness(k, n))
-		// 	}
-		// } else {
-		// 	fmt.Print("Witness query on targets: \n", endpoint.Query(query).Limit(10))
+		// fmt.Println("For node shape: ", k, " -- Explanations: ")
+		// for _, s := range expMap[k][:5] {
+		// 	fmt.Println(s)
 		// }
-
-		// fmt.Println("Witness query on targets:\n\n ", query)
 	}
+
+	// 	// var nodes []string = v.GetColumn(0)
+
+	// 	// targets, explanation := parsedDoc.InvalidTargetsWithExplanation(name, endpoint)
+
+	// 	// if k != sh+"WheelShape" { // extend Get Failure Witness to give proper answers based on dep
+	// 	// 	for _, n := range nodes {
+	// 	// 		fmt.Println(parsedDoc.FindReferentialFailureWitness(k, n))
+	// 	// 	}
+	// 	// } else {
+	// 	// 	fmt.Print("Witness query on targets: \n", endpoint.Query(query).Limit(10))
+	// 	// }
+
+	// 	// fmt.Println("Witness query on targets:\n\n ", query)
+	// }
 
 	// nodes := []string{"<https://dbpedia.org/resource/V41>", "<https://dbpedia.org/resource/V19>"}
 	// fmt.Println("Failure Witness WheelShape:\n", parsedDoc.shapeNames[sh+"WheelShape"].WitnessQuery(nodes))
