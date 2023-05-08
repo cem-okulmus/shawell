@@ -18,7 +18,12 @@ func (p PropertyShape) ToSparql() (out SparqlQuery) {
 	// this will basically just call ToSubquery, but instead turn it into an object of type
 	// SparqlQuery, corresponding to a single node shape only having this property as a constraint
 
-	return out
+	tmp := NodeShape{}
+
+	tmp.IRI = p.shape.IRI
+	tmp.properties = append(tmp.properties, p)
+
+	return tmp.ToSparql()
 }
 
 // ToSubquery is used to embedd the property shape into a node shape by way of a subquery in the
@@ -70,6 +75,10 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 	//
 	// leave out property inclusion here, would require more thoughts on dependency passing
 	//
+	// more thoughts: 1) introduce ability to identify arbitrary shape with a string (pointer?)
+	// 2) then simply use that string in attribute names 3) now pshapes can just pass on the
+	// the header of their child pshapes 4) ... 5) profit
+	//
 
 	if len(p.shape.in) > 0 {
 		var inList []string
@@ -87,7 +96,7 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 	}
 
 	if p.maxCount != 0 {
-		tmp := fmt.Sprint("( !BOUND( ?InnerObj", num, " ) || ", p.maxCount, " >= COUNT(DISTINCT ?InnerObj", num, ") )")
+		tmp := fmt.Sprint("(", p.maxCount, " >= COUNT(DISTINCT ?InnerObj", num, ") )")
 		having = append(having, tmp)
 	}
 
@@ -131,13 +140,6 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 	return head, body, having
 }
 
-func markPos(deps []dependency, pos int) []dependency {
-	for i := range deps {
-		deps[i].position = pos
-	}
-	return deps
-}
-
 // ToSparql produces a Sparql query that when run against an endpoint returns
 // the list of potential nodes satisying the shape, as well as a combination of
 // other nodes expressiong a conditional shape dependency such that any
@@ -171,9 +173,10 @@ func (n NodeShape) ToSparql() (out SparqlQuery) {
 		// fmt.Println("The body atom for property: ", p.shape.IRI)
 		// fmt.Println(p.ToSubquery(i))
 		if len(p.shape.deps) > 0 { // add needed projections to later check dependencies
-			head = append(head, fmt.Sprint("( GROUP_CONCAT(DISTINCT ?InnerObj", i, ") AS ?listObjs", i, " )"))
+			nameOfRef := p.GetIRI()
+			head = append(head, fmt.Sprint("( GROUP_CONCAT(DISTINCT ?InnerObj", i, ") AS ?", nameOfRef, " )"))
 		}
-		p.shape.deps = markPos(p.shape.deps, i)
+
 	}
 
 	// TODO: closed, ignoredProperties, severity, message

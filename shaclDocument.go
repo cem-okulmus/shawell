@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"strconv"
 	"strings"
 
 	rdf "github.com/deiu/rdf2go"
@@ -22,12 +21,10 @@ const (
 )
 
 type dependency struct {
-	name     string // the name (IRI or blank name) of the shape something depends on
-	negative bool   //  to look for the presence or instead for the absence of a shape
-	external bool   // whether the dependency is on the shape of another node (external), or
-	position int    // used by NodeShape to mark the output attribute for a given dep (will not work in general setting)
-	mode     depMode
-	// instead if it is on the current node also (not) being of a certain other shape ("internal")
+	name     []ShapeRef // the references used in a node-referring constraint inside a shape
+	origin   string     // the (node or property) shape the dependency originates from
+	external bool       // whether the dep is refering to value nodes (external) or to focus node (internal)
+	mode     depMode    // the type of reference that is used
 }
 
 type ShaclDocument struct {
@@ -57,10 +54,11 @@ func (s ShaclDocument) String() string {
 		var c *color.Color
 
 		rec, _ := s.TransitiveClosure(k)
+		// rec := false
 
 		for _, d := range deps {
 
-			if d.negative {
+			if d.mode == not {
 				c = color.New(color.FgRed).Add(color.Underline)
 			} else {
 				c = color.New(color.FgGreen).Add(color.Underline)
@@ -161,8 +159,8 @@ func mem(aas [][]rdf.Term, b rdf.Term) bool {
 	return false
 }
 
-// memList returns true, if any one element is included
-func memList(aas [][]rdf.Term, b rdf.Term) bool {
+// memListOne returns true, if any one element is included
+func memListOne(aas [][]rdf.Term, b rdf.Term) bool {
 	elements := strings.Split(b.RawValue(), " ")
 
 	for _, e := range elements {
@@ -189,72 +187,44 @@ func memListAll(aas [][]rdf.Term, b rdf.Term) bool {
 	return true
 }
 
-// Subset returns true if as subset of bs, false otherwise
-func Subset(as []string, bs []string) bool {
-	if len(as) == 0 {
-		return true
-	}
-	encounteredB := make(map[string]struct{})
-	var Empty struct{}
-	for _, b := range bs {
-		encounteredB[b] = Empty
-	}
-
-	for _, a := range as {
-		if _, ok := encounteredB[a]; !ok {
-			return false
-		}
-	}
-
-	return true
-}
-
-func RemoveDuplicates(elements []string) []string {
-	if len(elements) == 0 {
-		return elements
-	}
-	sort.Strings(elements)
-
-	j := 0
-	for i := 1; i < len(elements); i++ {
-		if elements[j] == elements[i] {
-			continue
-		}
-		j++
-
-		// only set what is required
-		elements[j] = elements[i]
-	}
-
-	return elements[:j+1]
-}
-
 // UnwindDependencies computes the trans. closure of deps among node shapes
 func (s ShaclDocument) TransitiveClosure(name string) (bool, []dependency) {
+	return s.TransitiveClosureRec(name, []string{})
+}
+
+func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool, []dependency) {
 	var out1, out2 []dependency
+
+	visited = append(visited, name)
+
+	// fmt.Println("Visited: ", visited)
 
 	out1 = append(out1, (*s.shapeNames[name]).GetDeps()...)
 	out2 = append(out2, out1...)
 
+	// fmt.Println("new deps: ", out1)
+
 	for i := range out1 {
-		if out1[i].name == name {
-			return true, []dependency{} // in case of recursive deps, we quit once we hit loop
+		for j := range visited {
+			for k := range out1[i].name {
+				if out1[i].name[k].name == visited[j] {
+					return true, out2 // in case of recursive deps, we quit once we hit loop
+				}
+			}
 		}
-		_, new_deps := s.TransitiveClosure(out1[i].name)
-		out2 = append(out2, new_deps...)
+
+		for k := range out1[i].name {
+			isRec, new_deps := s.TransitiveClosureRec(out1[i].name[k].name, visited)
+
+			if isRec {
+				return true, append(new_deps, out2...)
+			}
+			out2 = append(out2, new_deps...)
+		}
+
 	}
 
 	return false, out2
-}
-
-func DepsToString(dep []dependency) []string {
-	var out []string
-
-	for i := range dep {
-		out = append(out, dep[i].name)
-	}
-
-	return out
 }
 
 // ToSparql transforms a SHACL document into a series of Sparql queries
@@ -288,6 +258,66 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 	s.answered = true
 }
 
+func removeDuplicate[T comparable](sliceList []T) []T {
+	allKeys := make(map[T]bool)
+	list := []T{}
+	for _, item := range sliceList {
+		if _, value := allKeys[item]; !value {
+			allKeys[item] = true
+			list = append(list, item)
+		}
+	}
+	return list
+}
+
+func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondTable Table) []int {
+	var affectedIndices []int
+	var depTable Table
+
+	if _, ok := s.uncondAnswers[ref.name]; ok {
+		depTable = s.uncondAnswers[ref.name]
+	} else {
+		depTable = s.UnwindAnswer(ref.name) // recursively compute the needed uncond. answers
+	}
+
+	// NOTE: this only works for non-recursive shapes
+	// we now know that we deal with unconditional (unary) answers
+	if len(depTable.header) > 1 {
+		log.Panic("Received non-unary uncond. Answer! ", depTable)
+	}
+
+	var c int // column to compare
+
+	if dep.external {
+		found := false
+		for i, h := range uncondTable.header {
+			if strings.HasSuffix(h, dep.origin) {
+				found = true
+				c = i
+			}
+		}
+		if !found {
+			log.Panic("Couldn't find dep ", dep.name, " with origin ", dep.origin, " inside ", uncondTable.header)
+		}
+	} else {
+		c = 0 // intrinsic checks are made against the node shape itself
+	}
+
+	// fmt.Println("Dep ", dep.name, " is of type list: ", isList)
+	for i := range uncondTable.content {
+		if dep.mode == not {
+			if memListOne(depTable.content, uncondTable.content[i][c]) {
+				affectedIndices = append(affectedIndices, i)
+			}
+		} else {
+			if memListAll(depTable.content, uncondTable.content[i][c]) {
+				affectedIndices = append(affectedIndices, i)
+			}
+		}
+	}
+	return affectedIndices
+}
+
 // UnwindAnswer computes the unconditional answers
 func (s *ShaclDocument) UnwindAnswer(name string) Table {
 	if !s.answered {
@@ -314,89 +344,53 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 	}
 
 	for _, dep := range deps {
+		switch dep.mode {
+		case and:
+			for _, ref := range dep.name {
+				// filtering out answers from uncondTable
+				var affectedIndices []int = s.GetAffectedIndices(ref, dep, uncondTable)
 
-		var depTable Table
-		if _, ok := s.uncondAnswers[dep.name]; ok {
-			depTable = s.uncondAnswers[dep.name]
-		} else {
-			depTable = s.UnwindAnswer(dep.name) // recursively compute the needed uncond. answers
-		}
-
-		// NOTE: This check will not work for more complex queries, with propShape inside propShapes
-		// we now know that we deal with unconditional (unary) answers
-		if len(depTable.header) > 1 {
-			log.Panic("Received non-unary uncond. Answer! ", depTable)
-		}
-
-		var columnToCompare int
-		if dep.external {
-			found := false
-			for i, h := range uncondTable.header {
-				if strings.HasSuffix(h, "listObjs"+strconv.Itoa(dep.position)) {
-					found = true
-					columnToCompare = i
+				// only keep the affected indices in and case
+				var temp [][]rdf.Term
+				for _, i := range affectedIndices {
+					temp = append(temp, uncondTable.content[i])
 				}
+
+				uncondTable.content = temp
 			}
-			if !found {
-				log.Panic("Couldn't find dep ", dep.name, " inside ", uncondTable.header)
-			}
-		} else {
-			columnToCompare = 0 // intrinsic checks are made against the node shape itself
-		}
+		case not:
+			ref := dep.name[0] // not has only single reference (current design)
 
-		// filtering out answers from uncondTable
+			var affectedIndices []int = s.GetAffectedIndices(ref, dep, uncondTable)
 
-		var affectedIndices []int // first iterate, _then_ remove!
-
-		// fmt.Println("Dep ", dep.name, " is of type list: ", isList)
-
-		for i := range uncondTable.content {
-			// if !isList {
-			// 	if mem(depTable.content, uncondTable.content[i][columnToCompare]) {
-			// 		fmt.Print("At the position ", depTable.content)
-			// 		if dep.negative {
-			// 			fmt.Println("in  ", dep.name, ", found the term ", uncondTable.content[i][columnToCompare].String(), " ", i)
-			// 		}
-
-			// 		affectedIndices = append(affectedIndices, i)
-			// 	}
-			// } else {
-			if dep.negative {
-				if memList(depTable.content, uncondTable.content[i][columnToCompare]) {
-					affectedIndices = append(affectedIndices, i)
-				}
-			} else {
-				if memListAll(depTable.content, uncondTable.content[i][columnToCompare]) {
-					affectedIndices = append(affectedIndices, i)
-				}
-			}
-			// }
-		}
-
-		// fmt.Println("Working on shape,", name, " Size of working table before ", len(uncondTable.content))
-
-		if dep.negative { //  for negative deps, we remove the  affected indices
+			// using reverse sort to "safely" remove indices from slice while iterating over them
 			sort.Sort(sort.Reverse(sort.IntSlice(affectedIndices)))
-			// sort.Ints(affectedIndices)
-			// fmt.Println("affectedIndices ", affectedIndices)
 			for _, i := range affectedIndices {
 				// fmt.Println("removing ", i, " ", uncondTable.content[i][columnToCompare])
 				uncondTable.content = remove(uncondTable.content, i)
 			}
-		} else { // inversely, for positive deps we only keep the affected  indices
+
+		case or:
+			var allAffected []int
+			for _, ref := range dep.name {
+				// filtering out answers from uncondTable
+				allAffected = append(allAffected, s.GetAffectedIndices(ref, dep, uncondTable)...)
+			}
+			// wonder if this will work
+			allAffected = removeDuplicate(allAffected)
+
+			// only keep those that match at least one dep
 			var temp [][]rdf.Term
-			for _, i := range affectedIndices {
+			for _, i := range allAffected {
 				temp = append(temp, uncondTable.content[i])
 			}
 
 			uncondTable.content = temp
+		case xone:
+			// similar to or, but compute the symmetric difference at every step
+		case qualified:
+			// needs a custom branch in GetAffectedIndices method, but otherwise same as and
 		}
-
-		// fmt.Println("Size of working table afters ", len(uncondTable.content),
-		// " cheking ", dep.negative, " dep ", dep.name)
-
-		// fmt.Println("result \n", uncondTable.String())
-
 	}
 
 	var newTable Table
@@ -413,84 +407,84 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 	return s.uncondAnswers[name]
 }
 
-// FindReferentialFailureWitness produces a sentence explaining why the node does not fulfill the
-// referential constraints in the node shape. This does not cover any non-referential constraints
-// otherwise expressed in the node. (Future TODO to add that here too via Witness queries)
-func (s *ShaclDocument) FindReferentialFailureWitness(shape, node string) (string, bool) {
-	// if !s.validated {
-	// 	log.Panicln("Cannot call FindReferentialFailureWitness before validation.")
-	// }
+// // FindReferentialFailureWitness produces a sentence explaining why the node does not fulfill the
+// // referential constraints in the node shape. This does not cover any non-referential constraints
+// // otherwise expressed in the node. (Future TODO to add that here too via Witness queries)
+// func (s *ShaclDocument) FindReferentialFailureWitness(shape, node string) (string, bool) {
+// 	// if !s.validated {
+// 	// 	log.Panicln("Cannot call FindReferentialFailureWitness before validation.")
+// 	// }
 
-	_, ok := s.shapeNames[shape]
-	if !ok {
-		log.Panicln("Provided shape ", shape, " does not exist in this Shacl document.")
-	}
-	deps := (*s.shapeNames[shape]).GetDeps()
+// 	_, ok := s.shapeNames[shape]
+// 	if !ok {
+// 		log.Panicln("Provided shape ", shape, " does not exist in this Shacl document.")
+// 	}
+// 	deps := (*s.shapeNames[shape]).GetDeps()
 
-	var metDep []bool
-	var objNames []string
-	unmet := false
+// 	var metDep []bool
+// 	var objNames []string
+// 	unmet := false
 
-	condAns := s.condAnswers[shape]
+// 	condAns := s.condAnswers[shape]
 
-	index, found := condAns.FindRow(0, node)
-	if !found {
-		return "", false
-	}
+// 	index, found := condAns.FindRow(0, node)
+// 	if !found {
+// 		return "", false
+// 	}
 
-	row := condAns.content[index]
+// 	row := condAns.content[index]
 
-	for i, d := range deps {
+// 	for i, d := range deps {
 
-		// determine the column
-		headIndex := 0
-		if d.external {
+// 		// determine the column
+// 		headIndex := 0
+// 		if d.external {
 
-			headerFound := false
-			for j, h := range condAns.header {
-				if strings.HasPrefix(h, d.name[len(_sh):]) {
-					headIndex = j
-					headerFound = true
-				}
-			}
-			if !headerFound {
-				fmt.Println("\n header: ", condAns.header)
-				log.Panicln("For node, ", node, " cannot find the respect column in condAnswers for  ", d.name)
-			}
+// 			headerFound := false
+// 			for j, h := range condAns.header {
+// 				if strings.HasPrefix(h, d.name[len(_sh):]) {
+// 					headIndex = j
+// 					headerFound = true
+// 				}
+// 			}
+// 			if !headerFound {
+// 				fmt.Println("\n header: ", condAns.header)
+// 				log.Panicln("For node, ", node, " cannot find the respect column in condAnswers for  ", d.name)
+// 			}
 
-		} else {
-			headIndex = 0
-		}
+// 		} else {
+// 			headIndex = 0
+// 		}
 
-		metDep = append(metDep, false)
-		objNames = append(objNames, "")
+// 		metDep = append(metDep, false)
+// 		objNames = append(objNames, "")
 
-		depTable := s.uncondAnswers[d.name]
+// 		depTable := s.uncondAnswers[d.name]
 
-		if d.negative {
-			metDep[i] = !mem(depTable.content, res(node[1:len(node)-1]))
-		} else {
-			metDep[i] = mem(depTable.content, res(node[1:len(node)-1]))
-		}
-		if !metDep[i] {
-			// find the offending object name
-			objNames[i] = row[headIndex].String()
-			unmet = true
-		}
-	}
+// 		if d.mode == not {
+// 			metDep[i] = !mem(depTable.content, res(node[1:len(node)-1]))
+// 		} else {
+// 			metDep[i] = mem(depTable.content, res(node[1:len(node)-1]))
+// 		}
+// 		if !metDep[i] {
+// 			// find the offending object name
+// 			objNames[i] = row[headIndex].String()
+// 			unmet = true
+// 		}
+// 	}
 
-	var answers []string
+// 	var answers []string
 
-	for i := range metDep {
-		if !metDep[i] && deps[i].negative {
-			answers = append(answers, objNames[i]+" does have shape "+deps[i].name)
-		} else if !metDep[i] {
-			answers = append(answers, objNames[i]+" does not have shape "+deps[i].name)
-		}
-	}
+// 	for i := range metDep {
+// 		if !metDep[i] && deps[i].mode == not {
+// 			answers = append(answers, objNames[i]+" does have shape "+deps[i].name)
+// 		} else if !metDep[i] {
+// 			answers = append(answers, objNames[i]+" does not have shape "+deps[i].name)
+// 		}
+// 	}
 
-	return abbr(fmt.Sprint("For ", node, ": ", strings.Join(answers, ", and "), ".")), unmet
-}
+// 	return abbr(fmt.Sprint("For ", node, ": ", strings.Join(answers, ", and "), ".")), unmet
+// }
 
 func (s *ShaclDocument) GetTargetTerm(t TargetExpression) string {
 	var query string

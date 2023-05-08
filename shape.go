@@ -19,13 +19,13 @@ type Shape interface {
 // dummy interface to express that something is either NodeShape or  PropertyShape
 type NodeShape struct {
 	IRI             rdf.Term                // the IRI of the subject term defining the shape
-	valuetypes      []ValueTypeConstraint   // list of value type constraints (sh:class, ...)
+	valuetypes      []ValueTypeConstraint   // list of value type const`raints (sh:class, ...)
 	valueranges     []ValueRangeConstraint  // constraints on value ranges of matched values
 	stringconts     []StringBasedConstraint // for matched values, string-based constraints
 	propairconts    []PropertyPairConstraint
 	properties      []PropertyShape       // list of property shapes the node must satisfy
 	ands            AndListConstraint     // matched node must pos. match the given lists of shapes
-	ors             OrShapeConstraint     // matched node must conform to one of the given list of shpes
+	ors             []OrShapeConstraint   // matched node must conform to one of the given list of shpes
 	nots            []NotShapeConstraint  // matched node must not have the given shape
 	xones           []XoneShapeConstraint // [look up what the semantics here were]
 	nodes           []ShapeRef            // restrict the property universally to a shape
@@ -60,6 +60,8 @@ func (n NodeShape) StringTab(a int) string {
 
 	switch n.IRI.(type) {
 	case *rdf.BlankNode:
+		sb.WriteString(bold.Sprint(n.IRI))
+		sb.WriteString("(blank)")
 	default:
 		sb.WriteString(bold.Sprint(n.IRI))
 	}
@@ -104,8 +106,10 @@ func (n NodeShape) StringTab(a int) string {
 		sb.WriteString(n.nots[i].String() + tab)
 	}
 
-	if len(n.ors.shapes) > 0 {
-		sb.WriteString(n.ors.String() + tab)
+	if len(n.ors) > 0 {
+		for i := range n.ors {
+			sb.WriteString(n.ors[i].String() + tab)
+		}
 	}
 
 	if len(n.xones) > 0 {
@@ -207,7 +211,8 @@ func (p PropertyShape) StringTab(a int) string {
 	if p.name != "" {
 		sb.WriteString(bold.Sprint("<", p.name, ">"))
 	} else {
-		sb.WriteString(bold.Sprint("<Property>"))
+		sb.WriteString(bold.Sprint("<Property> "))
+		sb.WriteString(p.shape.IRI.String())
 	}
 	sb.WriteString(tab)
 

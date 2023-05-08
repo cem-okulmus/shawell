@@ -53,17 +53,17 @@ func (s SparqlQuery) String() string {
 	// }
 
 	sb.WriteString("SELECT ")
-	sb.WriteString(strings.Join(s.head, " "))
+	sb.WriteString(strings.Join(abbrAll(s.head), " "))
 	sb.WriteString(" { \n\t")
-	sb.WriteString(strings.Join(s.body, "\n\t"))
+	sb.WriteString(strings.Join(abbrAll(s.body), "\n\t"))
 
 	sb.WriteString("} \n")
 	sb.WriteString("GROUP BY ")
-	sb.WriteString(strings.Join(s.group, " "))
+	sb.WriteString(strings.Join(abbrAll(s.group), " "))
 
 	if len(s.having) > 0 {
 		sb.WriteString("\nHAVING (")
-		sb.WriteString(strings.Join(s.having, " && "))
+		sb.WriteString(strings.Join(abbrAll(s.having), " && "))
 		sb.WriteString(")\n")
 	}
 

@@ -22,8 +22,6 @@ func (s *ShaclDocument) GetShape(graph *rdf.Graph, term rdf.Term) (shape Shape) 
 	return shape
 }
 
-// TODO: given its occurence is limited to ShaclDoc, wouldn't it suffice to limit this to string?
-
 // A ShapeRef is used to capture the abilty of Shacl Documents to point to shapes
 // even before they are defined. Via lazy dereferencing, we can easily parse these
 // and get the pointer to an actual shape at time of translation to Sparql
@@ -1118,6 +1116,8 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf.Graph, term rdf.Term) (out NodeS
 		// Combine with PropertyShape constraint
 		case _sh + "property":
 			pshape := s.GetPropertyShape(graph, triples[i].Object)
+
+			// pDeps := markPos(pshape.shape.deps, len(out.properties))
 			deps = append(deps, pshape.shape.deps...) // should be ok
 			out.properties = append(out.properties, pshape)
 		// logic-based constraints
@@ -1126,13 +1126,13 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf.Graph, term rdf.Term) (out NodeS
 			out.ands.shapes = append(out.ands.shapes, ac.shapes...) // simply add them to the pile
 		case _sh + "or":
 			oc := s.ExtractOrShapeConstraint(graph, triples[i])
-			out.ors.shapes = append(out.ors.shapes, oc.shapes...) // simply add them to the pile
+			out.ors = append(out.ors, oc)
 		case _sh + "not":
 			ns := s.ExtractNotShapeConstraint(graph, triples[i])
 			out.nots = append(out.nots, ns)
 		case _sh + "xone":
 			xs := s.ExtractXoneShapeConstraint(graph, triples[i])
-			out.xones = append(out.xones, xs) // simply add them to the pile
+			out.xones = append(out.xones, xs)
 		// Combine with other NodeShape constraint
 		case _sh + "node":
 			var sr ShapeRef
@@ -1195,19 +1195,20 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf.Graph, term rdf.Term) (out NodeS
 
 	// Dependency Check
 
-	for i := range out.ands.shapes {
+	if len(out.ands.shapes) > 0 {
 		dep := dependency{
-			name:     out.ands.shapes[i].name,
-			negative: false,
+			name:     out.ands.shapes,
+			origin:   term.RawValue(),
 			external: false, // and ref inside node shape is internal
 			mode:     and,
 		}
 		deps = append(deps, dep)
 	}
-	for i := range out.ors.shapes {
+
+	for i := range out.ors {
 		dep := dependency{
-			name:     out.ors.shapes[i].name,
-			negative: false,
+			name:     out.ors[i].shapes,
+			origin:   term.RawValue(),
 			external: false, // or ref inside node shape is internal
 			mode:     or,
 		}
@@ -1215,20 +1216,18 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf.Graph, term rdf.Term) (out NodeS
 	}
 
 	for i := range out.xones {
-		for j := range out.xones[i].shapes {
-			dep := dependency{
-				name:     out.xones[i].shapes[j].name,
-				negative: false,
-				external: false, // or ref inside node shape is internal
-				mode:     xone,
-			}
-			deps = append(deps, dep)
+		dep := dependency{
+			name:     out.xones[i].shapes,
+			origin:   term.RawValue(),
+			external: false, // or ref inside node shape is internal
+			mode:     xone,
 		}
+		deps = append(deps, dep)
 	}
 	for i := range out.nots {
 		dep := dependency{
-			name:     out.nots[i].shape.name,
-			negative: true,
+			name:     []ShapeRef{out.nots[i].shape},
+			origin:   term.RawValue(),
 			external: false, // not ref inside node shape is internal
 			mode:     not,
 		}
@@ -1236,8 +1235,8 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf.Graph, term rdf.Term) (out NodeS
 	}
 	for i := range out.nodes {
 		dep := dependency{
-			name:     out.nodes[i].name,
-			negative: false,
+			name:     []ShapeRef{out.nodes[i]},
+			origin:   term.RawValue(),
 			external: false, // not ref inside node shape is internal
 			mode:     and,   // collection of sh:node refs acts equivalent to one sh:and ref
 		}
@@ -1246,8 +1245,8 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf.Graph, term rdf.Term) (out NodeS
 
 	for i := range out.qualifiedShapes {
 		dep := dependency{
-			name:     out.qualifiedShapes[i].shape.name,
-			negative: false,
+			name:     []ShapeRef{out.qualifiedShapes[i].shape},
+			origin:   term.RawValue(),
 			external: false, // not ref inside node shape is internal
 			mode:     qualified,
 		}

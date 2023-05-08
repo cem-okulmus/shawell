@@ -71,6 +71,8 @@ func GetNameSpace(file *os.File) {
 
 func abbr(in string) string {
 	for k, v := range prefixes {
+		in = strings.ReplaceAll(in, ">", "")
+		in = strings.ReplaceAll(in, "<", "")
 		in = strings.ReplaceAll(in, v, k)
 	}
 
@@ -137,6 +139,12 @@ var ResA = res(_rdf + "type")
 //   - sh:minExclusive, sh:maxExclusive, sh:minInclusive, sh:maxInclusive//
 
 // TODO:
+// * implement rewriting of conditional answers into logic programs
+// * implement integration with dlv:
+// 		- being able to send programs to dlv
+//		- being able to parse output from dlv back to unconditional answers
+// * consider if target extraction could not be merged into DLV program, to directly get validation
+// report of sorts
 // * support more of basic SHACL
 //   - sh:qualifiedValue (min + max)
 //   - sh:ignoredProperties (for sh:closed)
@@ -144,21 +152,12 @@ var ResA = res(_rdf + "type")
 //   - sh:xone
 //   - sh:or
 
+// LOW PRIORITY TODO:
 //  * Produce proper validation reports in RDF
 //   - support severity
 //   - result message
 //   - the various properties (value, source, path, focus, constraint)
 //  * deactivating a shape (should be easy)
-
-// * consider actual benchmarks to cover, before developing further towards integration with dlv
-// * implement rewriting of conditional answers into logic programs
-// * implement integration with dlv:
-// 		- being able to send programs to dlv
-//		- being able to parse output from dlv back to unconditional answers
-// * consider if target extraction could not be merged into DLV program, to directly get validation
-// report of sorts
-
-// Parse is used to parse RDF data from a reader, using the provided mime type
 
 func main() {
 	// ==============================================
@@ -218,8 +217,16 @@ func main() {
 
 	parsedDoc.AllCondAnswers(endpoint)
 
+	fmt.Println("CondAnswers for ",
+		_sh+"WheelShape", "  : ", parsedDoc.condAnswers[_sh+"WheelShape"].Limit(7))
+
+	fmt.Println("Logic Program for ",
+		_sh+"WheelShape", "  : ", parsedDoc.ToLP(_sh+"WheelShape"))
+
 	// fmt.Println("CondAnswers for ",
-	// 	_sh+"WheelShape", "  : ", parsedDoc.condAnswers[_sh+"WheelShape"].Limit(5))
+	// 	_sh+"Car2Shape", "  : ", parsedDoc.condAnswers[_sh+"Car2Shape"].Limit(5))
+	// fmt.Println("CondAnswers for ",
+	// 	_sh+"CarShape", "  : ", parsedDoc.condAnswers[_sh+"CarShape"].Limit(5))
 
 	// fmt.Println("Query for Car1Shape: \n", parsedDoc.shapeNames[_sh+"Car1Shape"].ToSparql())
 	// fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ",

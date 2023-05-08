@@ -119,6 +119,7 @@ func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
 // Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
 func (s SparqlEndpoint) Answer(ns *Shape) Table {
 	query := (*ns).ToSparql()
+	fmt.Println("Query: \n", query.String())
 	res, err := s.repo.Query(query.String())
 	check(err)
 
