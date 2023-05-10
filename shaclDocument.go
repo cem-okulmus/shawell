@@ -65,11 +65,16 @@ func (s ShaclDocument) String() string {
 			}
 
 			sb2.WriteString(" ")
-			if d.external {
-				sb2.WriteString(c.Sprint(d.name))
-			} else {
-				sb2.WriteString(c.Sprint("<<", d.name, ">>"))
+			var namesString []string
+			for _, sr := range d.name {
+				namesString = append(namesString, sr.name)
 			}
+			if d.external {
+				sb2.WriteString(c.Sprint(strings.Join(namesString, ", ")))
+			} else {
+				sb2.WriteString(c.Sprint("{", strings.Join(namesString, ", "), "}"))
+			}
+
 		}
 		if len(deps) == 0 {
 			sb.WriteString(fmt.Sprint(k, " is independent. \n"))

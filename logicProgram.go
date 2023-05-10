@@ -3,10 +3,18 @@ package main
 import (
 	"fmt"
 	"log"
+	"os/exec"
 	"strings"
 
 	rdf "github.com/deiu/rdf2go"
+
+	"github.com/alecthomas/participle"
+	"github.com/alecthomas/participle/lexer"
+	"github.com/alecthomas/participle/lexer/ebnf"
 )
+
+// the hardcoded address to DLV
+var dlv string = "bin/dlv"
 
 type rule struct {
 	head string
@@ -29,6 +37,85 @@ type program struct {
 	rules []rule
 }
 
+// TODO: no nice parsing back into the unconditional tables yet.
+
+type DLVAnswer struct {
+	Predicate string ` @(Number|Ident|String) `
+	Constant  string `"(" ( @(Number|Ident|String) ) ")" `
+}
+
+type DLVOutput struct {
+	Answers []DLVAnswer ` (String|Ident|Number|Punct) "{" ( @@ ","?)* "}" (String|Ident|Number|Punct) "{" (Number|Ident|String)*  "}" `
+}
+
+func (d DLVOutput) ToTables() (out []Table) {
+	answerMap := make(map[string][]string)
+
+	for i := range d.Answers {
+
+		p, v := d.Answers[i].Predicate, d.Answers[i].Constant
+
+		prev, ok := answerMap[p]
+		if !ok {
+			answerMap[p] = []string{v}
+		} else {
+			answerMap[p] = append(prev, v)
+		}
+	}
+
+	for k, v := range answerMap {
+		var tmp Table
+
+		tmp.header = append(tmp.header, k)
+
+		for i := range v {
+			tmp.content = append(tmp.content, []rdf.Term{res(v[i])})
+		}
+
+		out = append(out, tmp)
+	}
+
+	return out
+}
+
+// Answer sends the logic program to DLV, set to use well-founded semantics, and returns the output
+func (p program) Answer() []Table {
+	graphLexer := lexer.Must(ebnf.New(`
+    Comment = ("%" | "//") { "\u0000"…"\uffff"-"\n" } .
+    Ident = (digit| alpha | "_") { Punct |  "_" | alpha | digit } .
+    String = "\"" { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } "\"" .
+    Number = [ "-" | "+" ] ("." | digit) { "." | digit } .
+    Punct = "." | ";"  | "_" | ":" | "!" | "?" | "\\" | "/" | "=" | "[" | "]" | "'" | "$" | "<" | ">" | "-" | "+" | "~" | "@" | "*" | "\""  .
+    Parenthesis = "(" | ")"  | "," | "{" | "}".
+    Whitespace = " " | "\t" | "\n" | "\r" .
+    alpha = "a"…"z" | "A"…"Z" .
+    digit = "0"…"9" .
+    any = "\u0000"…"\uffff" .
+    `))
+
+	cmd := exec.Command(dlv, "--wellfounded")
+
+	outLP := p.String()
+
+	cmd.Stdin = strings.NewReader(outLP)
+
+	out, _ := cmd.Output()
+	// check(err)
+
+	outString := fmt.Sprintf("%s", out)
+
+	parser := participle.MustBuild(&DLVOutput{}, participle.UseLookahead(1), participle.Lexer(graphLexer),
+		participle.Elide("Comment", "Whitespace"))
+
+	var parsedDLVOutput DLVOutput
+	err := parser.ParseString(outString, &parsedDLVOutput)
+	if err != nil {
+		log.Panicln("input for parser: ", outString, "\n \n", err)
+	}
+
+	return parsedDLVOutput.ToTables()
+}
+
 func (p program) String() string {
 	var sb strings.Builder
 
@@ -40,7 +127,7 @@ func (p program) String() string {
 		}
 	}
 
-	return abbr(sb.String())
+	return strings.ToLower(removeAbbr(sb.String()))
 }
 
 func expandRules(values rdf.Term, indices []int, deps []dependency, head string) (out []rule) {
@@ -99,7 +186,7 @@ func expandRules(values rdf.Term, indices []int, deps []dependency, head string)
 
 			var body []string
 			for _, v := range valuesSlice {
-				body = append(body, fmt.Sprint("~", ref.name, "(", v, ")"))
+				body = append(body, fmt.Sprint("not ", ref.name, "(", v, ")"))
 			}
 
 			if len(out) == 0 {
@@ -119,9 +206,12 @@ func expandRules(values rdf.Term, indices []int, deps []dependency, head string)
 	return out
 }
 
-func (s ShaclDocument) TableToLP(table Table, deps []dependency) (out program) {
-	if len(table.header) <= 1 {
+func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bool) (out program) {
+	if len(table.header) <= 1 && !internalDeps {
 		log.Panicln("Not provided a conditional table")
+	}
+
+	if internalDeps {
 	}
 
 	head := table.header[0] + " (  VAR )"
@@ -132,6 +222,19 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency) (out program) {
 
 	numMatched := 0
 
+	if internalDeps {
+		body = append(body, table.header[0]+"INTERN(  VAR )")
+
+		for i := range deps {
+			if !deps[i].external {
+				depMap[i] = 0
+				attrMap[0] = append(attrMap[0], i)
+				numMatched++
+			}
+		}
+
+	}
+
 	for j, attr := range table.header {
 		if j == 0 {
 			continue // skip this for the main elemnet
@@ -140,6 +243,7 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency) (out program) {
 
 		matchingDepFound := false
 		for i := range deps {
+			// if dep[i]
 			if deps[i].origin == attr {
 				_, ok := depMap[i]
 				if ok {
@@ -156,6 +260,7 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency) (out program) {
 			log.Panicln("for attribute ", attr, " there is matching dependency")
 		}
 	}
+
 	if numMatched != len(deps) {
 		log.Panicln("Couldn't find a matching attribute for every dep")
 	}
@@ -172,7 +277,10 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency) (out program) {
 
 		for i, values := range row {
 			if i == 0 {
-				continue // skip this for the main elemnet
+				if internalDeps {
+					tempRules = expandRules(values, attrMap[i], deps, table.header[i]+"INTERN( "+element+" )")
+				}
+				continue
 			}
 
 			tempRules = expandRules(values, attrMap[i], deps, table.header[i]+"( "+element+" )")
@@ -199,7 +307,7 @@ func (s ShaclDocument) FactsToLP(table Table) (out program) {
 	return out
 }
 
-func (s ShaclDocument) ToLP(name string) (out program) {
+func (s ShaclDocument) GetOneLP(name string) (out program) {
 	if !s.answered {
 		log.Panicln("Cannot produce logic programs, before conditional answers have been computed.")
 	}
@@ -214,10 +322,32 @@ func (s ShaclDocument) ToLP(name string) (out program) {
 		log.Panic("conditional Answer for shape has not been produced yet", name)
 	}
 
+	deps := (*shape).GetDeps()
+
+	areInternalDeps := false
+
+	for i := range deps {
+		if !deps[i].external {
+			areInternalDeps = true
+		}
+	}
+
 	// check if it is indeed a conditional table
-	if len(condTable.content[0]) == 1 {
+	if len(condTable.content[0]) == 1 && !areInternalDeps {
+		fmt.Println("Shape: ", name, " had already uncond Table.")
 		return s.FactsToLP(condTable)
 	}
 
-	return s.TableToLP(condTable, (*shape).GetDeps())
+	fmt.Println("For shape ", name, " computing LP with deps ", deps)
+	return s.TableToLP(condTable, deps, areInternalDeps)
+}
+
+func (s ShaclDocument) GetAllLPs() (out program) {
+	for name := range s.shapeNames {
+		outTmp := s.GetOneLP(name)
+
+		out.rules = append(out.rules, outTmp.rules...)
+	}
+
+	return out
 }

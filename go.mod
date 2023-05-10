@@ -13,6 +13,7 @@ require (
 )
 
 require (
+	github.com/alecthomas/participle v0.7.1
 	github.com/deiu/gon3 v0.0.0-20230411081920-f0f8f879f597 // indirect
 	github.com/deiu/rdf2go v0.0.0-20230412071527-43bb57f57f0b
 	github.com/knakk/sparql v0.0.0-20220326141742-15797a7da0ca

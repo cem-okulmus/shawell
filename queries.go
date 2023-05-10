@@ -174,6 +174,7 @@ func (n NodeShape) ToSparql() (out SparqlQuery) {
 		// fmt.Println(p.ToSubquery(i))
 		if len(p.shape.deps) > 0 { // add needed projections to later check dependencies
 			nameOfRef := p.GetIRI()
+
 			head = append(head, fmt.Sprint("( GROUP_CONCAT(DISTINCT ?InnerObj", i, ") AS ?", nameOfRef, " )"))
 		}
 

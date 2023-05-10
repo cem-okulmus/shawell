@@ -38,6 +38,8 @@ var (
 )
 
 func GetNameSpace(file *os.File) {
+	// TODO: make this less crazy and ugly
+
 	// call the Seek method first
 	_, err := file.Seek(0, io.SeekStart)
 	check(err)
@@ -76,25 +78,13 @@ func abbr(in string) string {
 		in = strings.ReplaceAll(in, v, k)
 	}
 
-	// in = strings.ReplaceAll(in, _dbo, "dbo:")
-	// in = strings.ReplaceAll(in, _dbr, "dbr:")
-	// in = strings.ReplaceAll(in, _rdf, "rdf:")
-
 	return in
 }
 
 func removeAbbr(in string) string {
 	for _, v := range prefixes {
-		new, found := strings.CutPrefix(in, v)
-		if found {
-			return new
-		}
+		in = strings.ReplaceAll(in, v, "")
 	}
-
-	// in = strings.ReplaceAll(in, _dbo, "dbo:")
-	// in = strings.ReplaceAll(in, _dbr, "dbr:")
-	// in = strings.ReplaceAll(in, _rdf, "rdf:")
-
 	return in
 }
 
@@ -103,6 +93,16 @@ func abbrAll(in []string) []string {
 
 	for i := range in {
 		out = append(out, abbr(in[i]))
+	}
+
+	return out
+}
+
+func removeAbbrAll(in []string) []string {
+	var out []string
+
+	for i := range in {
+		out = append(out, removeAbbr(in[i]))
 	}
 
 	return out
@@ -137,11 +137,12 @@ var ResA = res(_rdf + "type")
 //   - sh:equals, disjoint, lessThan, lessThanOrEquals
 //   - sh:minLength, sh:maxLength, sh:languageIn, sh:uniqueLang
 //   - sh:minExclusive, sh:maxExclusive, sh:minInclusive, sh:maxInclusive//
-
-// TODO:
 // * implement rewriting of conditional answers into logic programs
 // * implement integration with dlv:
 // 		- being able to send programs to dlv
+
+// TODO:
+// * implement integration with dlv:
 //		- being able to parse output from dlv back to unconditional answers
 // * consider if target extraction could not be merged into DLV program, to directly get validation
 // report of sorts
@@ -168,6 +169,7 @@ func main() {
 	// input flags
 	endpointAddress := flagSet.String("endpoint", "", "The URL to a SPARQL endpoint.")
 	shaclDocPath := flagSet.String("shaclDoc", "", "The file path to a SHACL document.")
+	dlvLoc := flagSet.String("dlv", "bin/dlv", "The location of the DLV binary used to evaluate recursive SHACL.")
 
 	flagSet.Parse(os.Args[1:])
 
@@ -178,6 +180,9 @@ func main() {
 
 	// END Command-Line Argument Parsing
 	// ==============================================
+
+	// set DLV
+	dlv = *dlvLoc
 
 	shaclDoc, err := os.Open(*shaclDocPath)
 	check(err)
@@ -190,99 +195,20 @@ func main() {
 	var parsedDoc ShaclDocument = GetShaclDocument(g2)
 	fmt.Println("The parsed Shacl Doc", parsedDoc.String())
 
-	// if len(parsedDoc.nodeShapes) > 0 {
-	// 	fmt.Println("Chosen Shape: ", parsedDoc.nodeShapes[0])
-
-	// 	fmt.Println("\n Sparql Query:")
-	// 	fmt.Print("\n\n")
-
-	// 	query := parsedDoc.nodeShapes[0].ToSparql()
-
-	// 	fmt.Println(query.String())
-	// }
-
 	endpoint := GetSparqlEndpoint(*endpointAddress, "", "")
-
-	// var results []Table
-
-	// for _, n := range parsedDoc.nodeShapes[:1] {
-	// 	results = append(results, endpoint.Answer(n))
-	// }
-
-	// for i := range results {
-	// 	fmt.Println("Result table of query ", i)
-
-	// 	fmt.Println(results[i].LimitString(5))
-	// }
 
 	parsedDoc.AllCondAnswers(endpoint)
 
-	fmt.Println("CondAnswers for ",
-		_sh+"WheelShape", "  : ", parsedDoc.condAnswers[_sh+"WheelShape"].Limit(7))
-
-	fmt.Println("Logic Program for ",
-		_sh+"WheelShape", "  : ", parsedDoc.ToLP(_sh+"WheelShape"))
-
-	// fmt.Println("CondAnswers for ",
-	// 	_sh+"Car2Shape", "  : ", parsedDoc.condAnswers[_sh+"Car2Shape"].Limit(5))
-	// fmt.Println("CondAnswers for ",
-	// 	_sh+"CarShape", "  : ", parsedDoc.condAnswers[_sh+"CarShape"].Limit(5))
-
-	// fmt.Println("Query for Car1Shape: \n", parsedDoc.shapeNames[_sh+"Car1Shape"].ToSparql())
-	// fmt.Println("CondAnswers for ", sh+"WheelShape", "  : ",
-	// 	parsedDoc.condAnswers[sh+"WheelShape"].Limit(5))
-
-	// fmt.Println("UncondAnswers for CarShape: ",
-	// 	parsedDoc.UnwindAnswer(sh+"CarShape").Limit(10))
-	// fmt.Println("UncondAnswers for WheelShape: ",
-	// 	parsedDoc.UnwindAnswer(sh+"WheelShape").Limit(13))
-
-	// fmt.Println("Query for CarShape\n ", parsedDoc.shapeNames[sh+"Car2Shape"].ToSparql())
-
-	// fmt.Println("Targets of CarShape ",
-	// 	parsedDoc.GetTargets(sh+"CarShape", endpoint).Limit(5))
-	// fmt.Println("Targets of WheelShape ",
-	// 	parsedDoc.GetTargets(sh+"WheelShape", endpoint).Limit(5))
-
-	// fmt.Println("Invalid Targets of CarShape ",
-	// 	parsedDoc.InvalidTargets(sh+"CarShape", endpoint).Limit(5))
+	lp := parsedDoc.GetAllLPs()
+	fmt.Println("Get LP for document: ", lp)
 
 	res, invalidTargets := parsedDoc.Validate(endpoint)
 
 	fmt.Println("Shacl Document valid: ", res)
 
-	// // print all shapes
-	// for k, v := range parsedDoc.uncondAnswers {
-
-	// 	fmt.Println("Shape ", k)
-	// 	fmt.Println(v.Limit(5))
-
-	// }
-
 	for k, v := range invalidTargets {
 		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(5))
-
-		// fmt.Println("For node shape: ", k, " -- Explanations: ")
-		// for _, s := range expMap[k][:5] {
-		// 	fmt.Println(s)
-		// }
 	}
 
-	// 	// var nodes []string = v.GetColumn(0)
-
-	// 	// targets, explanation := parsedDoc.InvalidTargetsWithExplanation(name, endpoint)
-
-	// 	// if k != sh+"WheelShape" { // extend Get Failure Witness to give proper answers based on dep
-	// 	// 	for _, n := range nodes {
-	// 	// 		fmt.Println(parsedDoc.FindReferentialFailureWitness(k, n))
-	// 	// 	}
-	// 	// } else {
-	// 	// 	fmt.Print("Witness query on targets: \n", endpoint.Query(query).Limit(10))
-	// 	// }
-
-	// 	// fmt.Println("Witness query on targets:\n\n ", query)
-	// }
-
-	// nodes := []string{"<https://dbpedia.org/resource/V41>", "<https://dbpedia.org/resource/V19>"}
-	// fmt.Println("Failure Witness WheelShape:\n", parsedDoc.shapeNames[sh+"WheelShape"].WitnessQuery(nodes))
+	fmt.Println("Answer from DLV: ", lp.Answer())
 }
