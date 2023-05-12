@@ -8,6 +8,8 @@ import (
 
 	rdf "github.com/deiu/rdf2go"
 	"github.com/fatih/color"
+
+	"golang.org/x/exp/maps"
 )
 
 type depMode int32
@@ -27,14 +29,17 @@ type dependency struct {
 	mode     depMode    // the type of reference that is used
 }
 
+var Empty struct{}
+
 type ShaclDocument struct {
-	nodeShapes    []Shape
-	shapeNames    map[string]*Shape // used to unwind references to shapes
-	condAnswers   map[string]Table  // for each NodeShape, its (un)conditional answer
-	uncondAnswers map[string]Table  // caches the results from unwinding
-	targets       map[string]Table  // caches for targets
-	answered      bool
-	validated     bool
+	nodeShapes     []Shape
+	shapeNames     map[string]*Shape              // used to unwind references to shapes
+	condAnswers    map[string]Table               // for each NodeShape, its (un)conditional answer
+	uncondAnswers  map[string]Table               // caches the results from unwinding
+	targets        map[string]map[string]struct{} // caches for targets
+	indirectTarget map[string]map[string]struct{} // stores for each shape the indirect Targets, due to deps
+	answered       bool
+	validated      bool
 }
 
 func (s ShaclDocument) String() string {
@@ -90,14 +95,15 @@ func (s ShaclDocument) String() string {
 	return abbr(sb.String())
 }
 
-func GetShaclDocument(rdf *rdf.Graph) (out ShaclDocument) {
+func GetShaclDocument(rdfGraph *rdf.Graph) (out ShaclDocument) {
 	// var detected bool = true
 	out.shapeNames = make(map[string]*Shape)
 	out.condAnswers = make(map[string]Table)
 	out.uncondAnswers = make(map[string]Table)
-	out.targets = make(map[string]Table)
+	out.indirectTarget = make(map[string]map[string]struct{})
+	out.targets = make(map[string]map[string]struct{})
 
-	NodeShapeTriples := rdf.All(nil, ResA, res(_sh+"NodeShape"))
+	NodeShapeTriples := rdfGraph.All(nil, ResA, res(_sh+"NodeShape"))
 	// fmt.Println(res(sh+"NodeShape"), " of node shapes, ", NodeShapeTriples)
 
 	for _, t := range NodeShapeTriples {
@@ -110,7 +116,7 @@ func GetShaclDocument(rdf *rdf.Graph) (out ShaclDocument) {
 		}
 
 		var shape Shape
-		shape = out.GetNodeShape(rdf, t.Subject)
+		shape = out.GetNodeShape(rdfGraph, t.Subject)
 		out.nodeShapes = append(out.nodeShapes, shape)
 
 		if _, ok := out.shapeNames[name]; ok {
@@ -120,7 +126,7 @@ func GetShaclDocument(rdf *rdf.Graph) (out ShaclDocument) {
 		out.shapeNames[name] = &shape // add a reference to newly extracted shape
 	}
 
-	PropertyShapeTriples := rdf.All(nil, ResA, res(_sh+"PropertyShape"))
+	PropertyShapeTriples := rdfGraph.All(nil, ResA, res(_sh+"PropertyShape"))
 	// fmt.Println(res(sh+"NodeShape"), " of node shapes, ", NodeShapeTriples)
 
 	for _, t := range PropertyShapeTriples {
@@ -133,7 +139,7 @@ func GetShaclDocument(rdf *rdf.Graph) (out ShaclDocument) {
 		}
 
 		var shape Shape
-		shape = out.GetPropertyShape(rdf, t.Subject)
+		shape = out.GetPropertyShape(rdfGraph, t.Subject)
 		// if !ok {
 		// 	detected = false
 		// 	// fmt.Println("Failed during triple", t)
@@ -236,7 +242,10 @@ func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool
 // one for each node  shape
 func (s ShaclDocument) ToSparql() (out []SparqlQuery) {
 	for i := range s.nodeShapes {
-		out = append(out, s.nodeShapes[i].ToSparql())
+
+		target := s.GetTargetShape(s.nodeShapes[i].GetIRI())
+
+		out = append(out, s.nodeShapes[i].ToSparql(target))
 	}
 
 	return out
@@ -252,12 +261,78 @@ func remove(s [][]rdf.Term, i int) [][]rdf.Term {
 // }
 
 func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
-	for k, v := range s.shapeNames {
+	foundNewIndirect := true
 
-		out := ep.Answer(v)
-		// fmt.Println(k, "  for dep ", v.name, " we got the uncond answers ", out.LimitString(5))
+	for foundNewIndirect { // to ensure at least one iteration of this process
+		foundNewIndirect = false // can only enter a second iteration if new indirect targets found
 
-		s.condAnswers[k] = out
+	outer:
+		for k, v := range s.shapeNames {
+
+			_, ok := s.targets[k]
+			if !ok {
+				// compute targets before computing the query, if not already done
+				s.GetTargets(k, ep)
+			} else {
+				if m, ok := s.indirectTarget[k]; ok {
+					if len(m) == 0 {
+						continue outer // don't query if no new indirect targets
+					}
+				}
+			}
+
+			target := s.GetTargetShape(k)
+			out := ep.Answer(v, target)
+
+			if m, ok := s.indirectTarget[k]; ok {
+
+				for i := range m {
+					s.targets[k][i] = Empty
+				}
+
+				maps.Clear(m)
+				s.indirectTarget[k] = m
+			}
+
+			// fmt.Println(k, "  for dep ", v.name, " we got the uncond answers ", out.LimitString(5))
+
+			s.condAnswers[k] = out
+
+		}
+
+		for k, v := range s.shapeNames {
+			// extract indirect Targets
+			out := s.condAnswers[k]
+
+			deps := (*v).GetDeps()
+			for i := range deps {
+				for _, ref := range deps[i].name {
+
+					fmt.Println("Checking dep on ", ref.name, " for shape ", k)
+
+					indirectTargets := s.GetIndirectTargets(ref, deps[i], out)
+
+					fmt.Println("Found ", len(indirectTargets), " targets")
+
+					for i := range indirectTargets {
+						indirectString := indirectTargets[i].RawValue()
+						if _, ok := s.targets[ref.name][indirectString]; !ok {
+
+							foundNewIndirect = true
+							fmt.Println("-----------------------------")
+							fmt.Println("Found new indirectTargets for shape ", ref.name)
+							fmt.Println("-----------------------------")
+
+							if _, ok := s.indirectTarget[ref.name]; !ok {
+								s.indirectTarget[ref.name] = make(map[string]struct{})
+							}
+							s.indirectTarget[ref.name][indirectString] = Empty
+						}
+					}
+
+				}
+			}
+		}
 	}
 
 	s.answered = true
@@ -273,6 +348,34 @@ func removeDuplicate[T comparable](sliceList []T) []T {
 		}
 	}
 	return list
+}
+
+func (s *ShaclDocument) GetIndirectTargets(ref ShapeRef, dep dependency, condTable Table) []rdf.Term {
+	var indirectTargets []rdf.Term
+
+	var c int // column to compare
+
+	if dep.external {
+		found := false
+		for i, h := range condTable.header {
+			if strings.HasSuffix(h, dep.origin) {
+				found = true
+				c = i
+			}
+		}
+		if !found {
+			log.Panic("Couldn't find dep ", dep.name, " with origin ", dep.origin, " inside ", condTable.header)
+		}
+	} else {
+		c = 0 // intrinsic checks are made against the node shape itself
+	}
+
+	// fmt.Println("Dep ", dep.name, " is of type list: ", isList)
+	for i := range condTable.content {
+		indirectTargets = append(indirectTargets, condTable.content[i][c])
+	}
+
+	return indirectTargets
 }
 
 func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondTable Table) []int {
@@ -492,53 +595,48 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 // }
 
 func (s *ShaclDocument) GetTargetTerm(t TargetExpression) string {
-	var query string
+	var queryBody string
 	switch t.(type) {
 	case TargetClass:
 		t := t.(TargetClass)
 
-		query = "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n" +
-			"PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n" +
-			"SELECT DISTINCT ?sub {\n" +
-			"  ?sub rdf:type/rdfs:subClassOf* NODE .\n" +
-			"}"
+		queryBody = "?sub <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>/<http://www.w3.org/2000/01/rdf-schema#subClassOf>* NODE ."
 
-		query = strings.ReplaceAll(query, "NODE", t.class.String())
+		queryBody = strings.ReplaceAll(queryBody, "NODE", t.class.String())
 
 	case TargetNode:
 		t := t.(TargetNode)
 
-		query = "SELECT DISTINCT ?this {\n" +
-			"  BIND (NODE AS ?this)\n" +
-			"}"
+		queryBody = " BIND (NODE AS ?this)"
 
-		query = strings.ReplaceAll(query, "NODE", t.node.String())
+		queryBody = strings.ReplaceAll(queryBody, "NODE", t.node.String())
 
 	case TargetSubjectOf:
 		t := t.(TargetSubjectOf)
 
-		query = "SELECT DISTINCT ?sub {\n" +
-			"  ?sub NODE ?obj .\n" +
-			"}"
+		queryBody = "  ?sub NODE ?obj ."
 
-		query = strings.ReplaceAll(query, "NODE", t.path.String())
+		queryBody = strings.ReplaceAll(queryBody, "NODE", t.path.String())
 
 	case TargetObjectsOf:
 		t := t.(TargetObjectsOf)
 
-		query = "SELECT DISTINCT ?obj {\n" +
-			"  ?sub NODE ?obj .\n" +
-			"}"
+		queryBody = " ?obj NODE ?sub ."
 
-		query = strings.ReplaceAll(query, "NODE", t.path.String())
+		queryBody = strings.ReplaceAll(queryBody, "NODE", t.path.String())
+	case TargetIndirect:
+		t := t.(TargetIndirect)
+
+		queryBody = fmt.Sprint("VALUES ?sub {", strings.Join(t.terms, " "), "}")
 
 	}
 
-	return query
+	return queryBody
 }
 
-func (s *ShaclDocument) GetTargets(name string, ep endpoint) (Table, bool) {
-	var out Table
+// GetTargetShape produces the subquery needed to reduce the focus nodes to those described
+// in the target expressions, understood as the union overall target expressions.
+func (s *ShaclDocument) GetTargetShape(name string) (out string) {
 	var targets []TargetExpression
 
 	ns, ok := s.shapeNames[name]
@@ -553,32 +651,52 @@ func (s *ShaclDocument) GetTargets(name string, ep endpoint) (Table, bool) {
 		targets = (*ns).(PropertyShape).shape.target
 	}
 
-	if len(targets) == 0 {
-		return out, false
+	// handle implicit class targets
+	targets = append(targets, TargetClass{class: res((*ns).GetIRI())})
+
+	// handle indirect targets:
+	if v, ok := s.indirectTarget[name]; ok {
+		keys := maps.Keys(v)
+		targets = append(targets, TargetIndirect{terms: keys})
 	}
 
+	if len(targets) > 0 {
+		var queries []string
+
+		for i := range targets {
+			queries = append(queries, s.GetTargetTerm(targets[i]))
+		}
+		out = fmt.Sprint("SELECT DISTINCT ?sub {\n\t {", strings.Join(queries, "}\n UNION \n{"), "} \n}")
+	} else { // produce a dummy empty select
+		out = "SELECT ?sub {  }"
+	}
+
+	return out
+}
+
+func (s *ShaclDocument) GetTargets(name string, ep endpoint) {
+	var out Table
 	// check if result is already cached
-	if out, ok := s.targets[name]; ok {
-		return out, true
+	if _, ok := s.targets[name]; ok {
+		return
 	}
 
-	var queries []string
-
-	for i := range targets {
-		queries = append(queries, s.GetTargetTerm(targets[i]))
-	}
-
-	out = ep.Query(strings.Join(queries, "\n UNION \n"))
+	query := s.GetTargetShape(name)
 
 	// cache the result
-	s.targets[name] = out
+	out = ep.Query(query)
+	s.targets[name] = make(map[string]struct{})
 
-	return out, true
+	for _, row := range out.content {
+		if _, ok := s.targets[name][row[0].RawValue()]; !ok {
+			s.targets[name][row[0].RawValue()] = Empty
+		}
+	}
 }
 
 // InvalidTargets compares the targets of a node shape against the decorated graph and
 // returns those targets that do not have this shape
-func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) (Table, bool) {
+func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) Table {
 	var out Table
 
 	if !s.answered {
@@ -588,26 +706,26 @@ func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) (Table, bool) 
 	nodesWithShape := s.UnwindAnswer(shape)
 	// fmt.Println("Answers: ", len(nodesWithShape.content))
 
-	targets, hasTargets := s.GetTargets(shape, ep)
-	if !hasTargets {
-		return out, false
-	}
+	// targets := s.GetTargets(shape, ep)
+	// if !hasTargets {
+	// 	return out, false
+	// }
 
 	out.header = append(out.header, "Not "+shape[len(_sh):])
 
 outer:
-	for _, t := range targets.content {
-		term := t[0]
+	for t := range s.targets[shape] {
+
 		for _, n := range nodesWithShape.content {
-			if n[0].Equal(term) {
+			if t == n[0].RawValue() {
 				// fmt.Println("Found ", term, " in the answer")
 				continue outer
 			}
 		}
-		out.content = append(out.content, t)
+		out.content = append(out.content, []rdf.Term{res(t)})
 	}
 
-	return out, true
+	return out
 }
 
 // InvalidTargetsWithExplanation returns the targets that do not match the shape they are supposed
@@ -659,8 +777,8 @@ func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table) {
 	// Produce InvalidTargets for each node shape
 	for i := range s.nodeShapes {
 		iri := s.nodeShapes[i].GetIRI()
-		invalidTargets, hasTargets := s.InvalidTargets(iri, ep)
-		if hasTargets && len(invalidTargets.content) > 0 {
+		invalidTargets := s.InvalidTargets(iri, ep)
+		if len(invalidTargets.content) > 0 {
 			out[iri] = invalidTargets
 			// outExp[iri] = abbrAll(explanations)
 			result = false

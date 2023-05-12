@@ -11,12 +11,12 @@ import (
 type Shape interface {
 	IsShape()
 	String() string
-	ToSparql() SparqlQuery
+	ToSparql(target string) SparqlQuery
 	GetIRI() string
 	GetDeps() []dependency
 }
 
-// dummy interface to express that something is either NodeShape or  PropertyShape
+// NodeShape
 type NodeShape struct {
 	IRI             rdf.Term                // the IRI of the subject term defining the shape
 	valuetypes      []ValueTypeConstraint   // list of value type const`raints (sh:class, ...)

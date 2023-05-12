@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	rdf "github.com/deiu/rdf2go"
+
 	"github.com/knakk/sparql"
+	"golang.org/x/exp/constraints"
 )
 
 // GetTable returns from a query result a table, and a header of shape names
@@ -15,6 +18,7 @@ import (
 type Table struct {
 	header  []string
 	content [][]rdf.Term
+	cache   []string
 }
 
 func (t Table) String() string {
@@ -29,6 +33,54 @@ func (t Table) GetColumn(column int) []string {
 	}
 
 	return out
+}
+
+// Sorted has complexity: O(n * log(n)), a needs to be sorted
+func SortedGeneric[T constraints.Ordered](a []T, b []T) []T {
+	set := make([]T, 0)
+
+	for _, v := range a {
+		idx := sort.Search(len(b), func(i int) bool {
+			return b[i] >= v
+		})
+		if idx < len(b) && b[idx] == v {
+			set = append(set, v)
+		}
+	}
+
+	return set
+}
+
+// CheckInclusion checks for a given column of another table whether it's contained
+// fully in the first column of this row. (TODO could be generalised a bit if needed)
+func (t *Table) CheckInclusion(other []rdf.Term) bool {
+	if len(t.content) == 0 && len(other) != 0 {
+		return false // empty Table contains nothing non-empty
+	}
+	if len(other) == 0 {
+		return true // empty list is contained in anything
+	}
+
+	if len(t.cache) == 0 {
+		for i := range t.content {
+			t.cache = append(t.cache, t.content[i][0].RawValue())
+		}
+	}
+
+	var otherString []string
+
+	for i := range other {
+		otherString = append(otherString, other[i].RawValue())
+	}
+
+	intersectSize := len(SortedGeneric(t.cache, otherString))
+
+	fmt.Println("This: ", t.cache)
+	fmt.Println("Other: ", otherString)
+
+	fmt.Println("Intersect Size: ", intersectSize)
+
+	return intersectSize == len((otherString))
 }
 
 func (t Table) FindRow(column int, value string) (int, bool) {
@@ -94,11 +146,11 @@ func GetTable(r *sparql.Results) Table {
 		resultTable = append(resultTable, tupleOrdered)
 	}
 
-	return Table{r.Head.Vars, resultTable}
+	return Table{header: r.Head.Vars, content: resultTable}
 }
 
 type endpoint interface {
-	Answer(ns *Shape) Table
+	Answer(ns *Shape, target string) Table
 	Query(s string) Table
 }
 
@@ -117,9 +169,9 @@ func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
 }
 
 // Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
-func (s SparqlEndpoint) Answer(ns *Shape) Table {
-	query := (*ns).ToSparql()
-	fmt.Println("Query: \n", query.String())
+func (s SparqlEndpoint) Answer(ns *Shape, target string) Table {
+	query := (*ns).ToSparql(target)
+	// fmt.Println("Query: \n", query.String())
 	res, err := s.repo.Query(query.String())
 	check(err)
 

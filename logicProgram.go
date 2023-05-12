@@ -331,6 +331,9 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 			areInternalDeps = true
 		}
 	}
+	if len(condTable.content) == 0 {
+		return out // empty program, since nothing in Table
+	}
 
 	// check if it is indeed a conditional table
 	if len(condTable.content[0]) == 1 && !areInternalDeps {

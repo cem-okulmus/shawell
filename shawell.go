@@ -31,14 +31,17 @@ var prefixes map[string]string = make(map[string]string)
 // making it easier to define proper terms
 var (
 	_sh   = "http://www.w3.org/ns/shacl#"
-	_dbo  = "https://dbpedia.org/ontology/"
-	_dbr  = "https://dbpedia.org/resource/"
 	_rdf  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 	_rdfs = "http://www.w3.org/2000/01/rdf-schema#"
 )
 
 func GetNameSpace(file *os.File) {
 	// TODO: make this less crazy and ugly
+
+	// fix standard prefixes
+	prefixes["sh:"] = _sh
+	prefixes["rdf:"] = _rdf
+	prefixes["rdfs:"] = _rdfs
 
 	// call the Seek method first
 	_, err := file.Seek(0, io.SeekStart)
@@ -140,12 +143,19 @@ var ResA = res(_rdf + "type")
 // * implement rewriting of conditional answers into logic programs
 // * implement integration with dlv:
 // 		- being able to send programs to dlv
+//		- being able to parse output from dlv back to unconditional answers
+// * Implement the restriction of Sparql queries to target nodes and indirect target nodes
+//    - incorporate the implicit target semantics
+//    - introduce indirect targets as a data structure
+//    - extraction of indirect targets from a Table
 
 // TODO:
-// * implement integration with dlv:
-//		- being able to parse output from dlv back to unconditional answers
-// * consider if target extraction could not be merged into DLV program, to directly get validation
-// report of sorts
+
+// * Test out recursion, and compare behaviour with other solvers
+//   - recreate the (s <- s; s <- not not s) case in shacl and check the behaviour
+//   - find a list of validators out there supporting recursion
+// * Implement the restriction of Sparql queries to target nodes and indirect target nodes
+//    - support for recursion, and iterated indirect target passing
 // * support more of basic SHACL
 //   - sh:qualifiedValue (min + max)
 //   - sh:ignoredProperties (for sh:closed)
@@ -200,7 +210,7 @@ func main() {
 	parsedDoc.AllCondAnswers(endpoint)
 
 	lp := parsedDoc.GetAllLPs()
-	fmt.Println("Get LP for document: ", lp)
+	// fmt.Println("Get LP for document: ", lp)
 
 	res, invalidTargets := parsedDoc.Validate(endpoint)
 
@@ -210,5 +220,9 @@ func main() {
 		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(5))
 	}
 
-	fmt.Println("Answer from DLV: ", lp.Answer())
+	lpTables := lp.Answer()
+	fmt.Println("Answer from DLV: ")
+	for i := range lpTables {
+		fmt.Println(lpTables[i].Limit(5))
+	}
 }

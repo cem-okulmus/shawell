@@ -31,7 +31,6 @@ type SparqlQuery struct {
 	body   []string // positive expressions that check for existance of some objects
 	group  []string
 	having []string
-	// subqueries []SparqlQuery
 }
 
 func (s SparqlQuery) String() string {

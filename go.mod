@@ -2,7 +2,10 @@ module github.com/cem-okulmus/shawell
 
 go 1.19
 
-require github.com/fatih/color v1.15.0
+require (
+	github.com/fatih/color v1.15.0
+	golang.org/x/exp v0.0.0-20230510235704-dd950f8aeaea
+)
 
 require (
 	github.com/knakk/digest v0.0.0-20160404164910-fd45becddc49 // indirect

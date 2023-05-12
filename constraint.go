@@ -1026,6 +1026,14 @@ type TargetExpression interface {
 	String() string
 }
 
+type TargetIndirect struct {
+	terms []string // the list of terms
+}
+
+func (t TargetIndirect) String() string {
+	return fmt.Sprint(t.terms)
+}
+
 type TargetClass struct {
 	class rdf.Term // the class that is being targeted
 }

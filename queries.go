@@ -14,7 +14,7 @@ import (
 
 // ToSparql produces a stand-alone sparql query that produces the list of nodes satisfying the
 // shape in the RDF graph
-func (p PropertyShape) ToSparql() (out SparqlQuery) {
+func (p PropertyShape) ToSparql(target string) (out SparqlQuery) {
 	// this will basically just call ToSubquery, but instead turn it into an object of type
 	// SparqlQuery, corresponding to a single node shape only having this property as a constraint
 
@@ -23,7 +23,7 @@ func (p PropertyShape) ToSparql() (out SparqlQuery) {
 	tmp.IRI = p.shape.IRI
 	tmp.properties = append(tmp.properties, p)
 
-	return tmp.ToSparql()
+	return tmp.ToSparql(target)
 }
 
 // ToSubquery is used to embedd the property shape into a node shape by way of a subquery in the
@@ -145,7 +145,7 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 // other nodes expressiong a conditional shape dependency such that any
 // potential node is only satisfied if and only if the conditional nodes have
 // or do not have the specified shapes.
-func (n NodeShape) ToSparql() (out SparqlQuery) {
+func (n NodeShape) ToSparql(target string) (out SparqlQuery) {
 	var vars []string
 	var head []string // variables and renamings appearing inside the SELECT statement
 	var body []string // statements that form the inside of the WHERE clause
@@ -158,8 +158,9 @@ func (n NodeShape) ToSparql() (out SparqlQuery) {
 	vars = append(vars, "?sub")
 	group = append(group, "?sub")
 
-	initial := "{?sub ?pred ?obj. }\n\tUNION\n\t{?objI ?predI ?sub.}"
-	body = append(body, initial)
+	// initial := "{?sub ?pred ?obj. }\n\tUNION\n\t{?objI ?predI ?sub.}"
+
+	body = append(body, fmt.Sprint("{\n\t", target, "\n\t}"))
 
 	// TODO: all other constraints at node shape level
 
