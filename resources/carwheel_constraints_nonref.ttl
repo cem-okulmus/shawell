@@ -12,7 +12,7 @@ sh:CarShape
 		sh:minCount 4 ;
 		sh:maxCount 4;
 	] ;
-	sh:deactivated true.
+	sh:deactivated true .
 
 sh:WheelShape
 	a sh:NodeShape ;

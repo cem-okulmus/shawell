@@ -27,6 +27,8 @@ type dependency struct {
 	origin   string     // the (node or property) shape the dependency originates from
 	external bool       // whether the dep is refering to value nodes (external) or to focus node (internal)
 	mode     depMode    // the type of reference that is used
+	min      int        // used by qualifiedValueShape
+	max      int        // used by qualifiedValueShape
 }
 
 var Empty struct{}
@@ -36,6 +38,7 @@ type ShaclDocument struct {
 	shapeNames     map[string]*Shape              // used to unwind references to shapes
 	condAnswers    map[string]Table               // for each NodeShape, its (un)conditional answer
 	uncondAnswers  map[string]Table               // caches the results from unwinding
+	origTargets    map[string][]rdf.Term          // cache the original result for cache
 	targets        map[string]map[string]struct{} // caches for targets
 	indirectTarget map[string]map[string]struct{} // stores for each shape the indirect Targets, due to deps
 	answered       bool
@@ -100,6 +103,7 @@ func GetShaclDocument(rdfGraph *rdf.Graph) (out ShaclDocument) {
 	out.shapeNames = make(map[string]*Shape)
 	out.condAnswers = make(map[string]Table)
 	out.uncondAnswers = make(map[string]Table)
+	out.origTargets = make(map[string][]rdf.Term)
 	out.indirectTarget = make(map[string]map[string]struct{})
 	out.targets = make(map[string]map[string]struct{})
 
@@ -119,9 +123,9 @@ func GetShaclDocument(rdfGraph *rdf.Graph) (out ShaclDocument) {
 		shape = out.GetNodeShape(rdfGraph, t.Subject)
 		out.nodeShapes = append(out.nodeShapes, shape)
 
-		if _, ok := out.shapeNames[name]; ok {
-			panic("Two shapes with same name, shape names must be unique!")
-		}
+		// if _, ok := out.shapeNames[name]; ok {
+		// 	panic("Two shapes with same name, shape names must be unique!")
+		// }
 
 		out.shapeNames[name] = &shape // add a reference to newly extracted shape
 	}
@@ -170,6 +174,38 @@ func mem(aas [][]rdf.Term, b rdf.Term) bool {
 	return false
 }
 
+// memListOne returns true, if exactly one element is included
+func memListQual(aas [][]rdf.Term, b rdf.Term, min, max int) bool {
+	elements := strings.Split(b.RawValue(), " ")
+
+	count := 0
+	for _, e := range elements {
+		out := mem(aas, res(e))
+		if out {
+			count = count + 1
+		}
+	}
+
+	return (count >= min) && (count <= max)
+}
+
+// memListOne returns true, if exactly one element is included
+func memListXone(aas [][]rdf.Term, b rdf.Term) bool {
+	elements := strings.Split(b.RawValue(), " ")
+
+	first := false
+	for _, e := range elements {
+		out := mem(aas, res(e))
+		if out && first {
+			return false
+		} else {
+			first = true
+		}
+	}
+
+	return true
+}
+
 // memListOne returns true, if any one element is included
 func memListOne(aas [][]rdf.Term, b rdf.Term) bool {
 	elements := strings.Split(b.RawValue(), " ")
@@ -210,7 +246,10 @@ func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool
 
 	// fmt.Println("Visited: ", visited)
 
-	out1 = append(out1, (*s.shapeNames[name]).GetDeps()...)
+	if _, ok := s.shapeNames[name]; ok {
+		out1 = append(out1, (*s.shapeNames[name]).GetDeps()...)
+	}
+
 	out2 = append(out2, out1...)
 
 	// fmt.Println("new deps: ", out1)
@@ -296,7 +335,14 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 
 			// fmt.Println(k, "  for dep ", v.name, " we got the uncond answers ", out.LimitString(5))
 
-			s.condAnswers[k] = out
+			if _, ok := s.condAnswers[k]; !ok {
+				s.condAnswers[k] = out
+			} else {
+				tmpTable := s.condAnswers[k]
+
+				tmpTable.content = append(tmpTable.content, out.content...)
+				s.condAnswers[k] = tmpTable
+			}
 
 		}
 
@@ -306,6 +352,11 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 
 			deps := (*v).GetDeps()
 			for i := range deps {
+
+				if !deps[i].external {
+					continue // no need to add targets for internal dependency
+				}
+
 				for _, ref := range deps[i].name {
 
 					fmt.Println("Checking dep on ", ref.name, " for shape ", k)
@@ -319,15 +370,18 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 						if _, ok := s.targets[ref.name][indirectString]; !ok {
 
 							foundNewIndirect = true
-							fmt.Println("-----------------------------")
-							fmt.Println("Found new indirectTargets for shape ", ref.name)
-							fmt.Println("-----------------------------")
 
 							if _, ok := s.indirectTarget[ref.name]; !ok {
 								s.indirectTarget[ref.name] = make(map[string]struct{})
 							}
 							s.indirectTarget[ref.name][indirectString] = Empty
 						}
+					}
+
+					if foundNewIndirect {
+						fmt.Println("-----------------------------")
+						fmt.Println("Found new indirectTargets for shape ", ref.name)
+						fmt.Println("-----------------------------")
 					}
 
 				}
@@ -347,6 +401,45 @@ func removeDuplicate[T comparable](sliceList []T) []T {
 			list = append(list, item)
 		}
 	}
+	return list
+}
+
+type Kinds int8
+
+const (
+	inA Kinds = iota
+	inB
+	inBoth
+)
+
+func symmetricDiff[T comparable](sliceListA, sliceListB []T) []T {
+	allKeys := make(map[T]Kinds)
+	list := []T{}
+	for _, item := range sliceListA { // map now knows all As
+		if _, ok := allKeys[item]; !ok {
+			allKeys[item] = inA
+		}
+	}
+	for _, item := range sliceListB { // set all entries in map to false that are also in B
+		value, ok := allKeys[item]
+		if !ok {
+			allKeys[item] = inB
+		} else {
+			switch value {
+			case inA:
+				allKeys[item] = inBoth
+			case inB:
+				// skip since duplicate
+			}
+		}
+	}
+
+	for k, v := range allKeys {
+		if v != inBoth {
+			list = append(list, k)
+		}
+	}
+
 	return list
 }
 
@@ -372,13 +465,19 @@ func (s *ShaclDocument) GetIndirectTargets(ref ShapeRef, dep dependency, condTab
 
 	// fmt.Println("Dep ", dep.name, " is of type list: ", isList)
 	for i := range condTable.content {
-		indirectTargets = append(indirectTargets, condTable.content[i][c])
+		cont := condTable.content[i][c]
+		splitCont := strings.Split(cont.RawValue(), " ")
+
+		for j := range splitCont {
+			indirectTargets = append(indirectTargets, res(splitCont[j]))
+		}
+
 	}
 
 	return indirectTargets
 }
 
-func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondTable Table) []int {
+func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondTable Table, min, max int) []int {
 	var affectedIndices []int
 	var depTable Table
 
@@ -413,17 +512,43 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 
 	// fmt.Println("Dep ", dep.name, " is of type list: ", isList)
 	for i := range uncondTable.content {
-		if dep.mode == not {
+		switch dep.mode {
+		case not:
 			if memListOne(depTable.content, uncondTable.content[i][c]) {
 				affectedIndices = append(affectedIndices, i)
 			}
-		} else {
+		case and:
 			if memListAll(depTable.content, uncondTable.content[i][c]) {
+				affectedIndices = append(affectedIndices, i)
+			}
+		case or:
+			if memListOne(depTable.content, uncondTable.content[i][c]) {
+				affectedIndices = append(affectedIndices, i)
+			}
+		case xone:
+			if memListXone(depTable.content, uncondTable.content[i][c]) {
+				affectedIndices = append(affectedIndices, i)
+			}
+		case qualified:
+			if memListQual(depTable.content, uncondTable.content[i][c], min, max) {
 				affectedIndices = append(affectedIndices, i)
 			}
 		}
 	}
 	return affectedIndices
+}
+
+// IsRecursive checks for each shape whether it depends (in its transitive closure) on itself
+func (s *ShaclDocument) IsRecursive() bool {
+	for shape := range s.shapeNames {
+		rec, _ := s.TransitiveClosure(shape)
+
+		if rec {
+			return true
+		}
+	}
+
+	return false
 }
 
 // UnwindAnswer computes the unconditional answers
@@ -456,7 +581,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 		case and:
 			for _, ref := range dep.name {
 				// filtering out answers from uncondTable
-				var affectedIndices []int = s.GetAffectedIndices(ref, dep, uncondTable)
+				var affectedIndices []int = s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max)
 
 				// only keep the affected indices in and case
 				var temp [][]rdf.Term
@@ -469,7 +594,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 		case not:
 			ref := dep.name[0] // not has only single reference (current design)
 
-			var affectedIndices []int = s.GetAffectedIndices(ref, dep, uncondTable)
+			var affectedIndices []int = s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max)
 
 			// using reverse sort to "safely" remove indices from slice while iterating over them
 			sort.Sort(sort.Reverse(sort.IntSlice(affectedIndices)))
@@ -482,7 +607,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 			var allAffected []int
 			for _, ref := range dep.name {
 				// filtering out answers from uncondTable
-				allAffected = append(allAffected, s.GetAffectedIndices(ref, dep, uncondTable)...)
+				allAffected = append(allAffected, s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max)...)
 			}
 			// wonder if this will work
 			allAffected = removeDuplicate(allAffected)
@@ -496,8 +621,34 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 			uncondTable.content = temp
 		case xone:
 			// similar to or, but compute the symmetric difference at every step
+			var allAffected []int
+			for _, ref := range dep.name {
+				// filtering out answers from uncondTable
+				temps := s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max)
+
+				allAffected = symmetricDiff(allAffected, temps)
+			}
+
+			// only keep those that match at least one dep
+			var temp [][]rdf.Term
+			for _, i := range allAffected {
+				temp = append(temp, uncondTable.content[i])
+			}
+
+			uncondTable.content = temp
+
 		case qualified:
-			// needs a custom branch in GetAffectedIndices method, but otherwise same as and
+			ref := dep.name[0] // qualifiedValueShape too has only single reference
+
+			var affectedIndices []int = s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max)
+
+			// only keep the affected indices in and case
+			var temp [][]rdf.Term
+			for _, i := range affectedIndices {
+				temp = append(temp, uncondTable.content[i])
+			}
+
+			uncondTable.content = temp
 		}
 	}
 
@@ -652,7 +803,10 @@ func (s *ShaclDocument) GetTargetShape(name string) (out string) {
 	}
 
 	// handle implicit class targets
-	targets = append(targets, TargetClass{class: res((*ns).GetIRI())})
+
+	if !(*ns).IsBlank() {
+		targets = append(targets, TargetClass{class: res((*ns).GetIRI())})
+	}
 
 	// handle indirect targets:
 	if v, ok := s.indirectTarget[name]; ok {
@@ -668,7 +822,7 @@ func (s *ShaclDocument) GetTargetShape(name string) (out string) {
 		}
 		out = fmt.Sprint("SELECT DISTINCT ?sub {\n\t {", strings.Join(queries, "}\n UNION \n{"), "} \n}")
 	} else { // produce a dummy empty select
-		out = "SELECT ?sub {  }"
+		out = "SELECT ?sub { {?sub ?targetPred ?targetObj.} UNION  {?taretObjI ?targetPredI ?sub.}  }"
 	}
 
 	return out
@@ -690,8 +844,11 @@ func (s *ShaclDocument) GetTargets(name string, ep endpoint) {
 	for _, row := range out.content {
 		if _, ok := s.targets[name][row[0].RawValue()]; !ok {
 			s.targets[name][row[0].RawValue()] = Empty
+			s.origTargets[name] = append(s.origTargets[name], row[0])
+
 		}
 	}
+	// fmt.Println("Orig Targets of shape ", name, " len: ", len(s.o))
 }
 
 // InvalidTargets compares the targets of a node shape against the decorated graph and
@@ -714,15 +871,15 @@ func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) Table {
 	out.header = append(out.header, "Not "+shape[len(_sh):])
 
 outer:
-	for t := range s.targets[shape] {
+	for _, t := range s.origTargets[shape] {
 
 		for _, n := range nodesWithShape.content {
-			if t == n[0].RawValue() {
+			if n[0].Equal(t) {
 				// fmt.Println("Found ", term, " in the answer")
 				continue outer
 			}
 		}
-		out.content = append(out.content, []rdf.Term{res(t)})
+		out.content = append(out.content, []rdf.Term{t})
 	}
 
 	return out
@@ -776,12 +933,14 @@ func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table) {
 
 	// Produce InvalidTargets for each node shape
 	for i := range s.nodeShapes {
-		iri := s.nodeShapes[i].GetIRI()
-		invalidTargets := s.InvalidTargets(iri, ep)
-		if len(invalidTargets.content) > 0 {
-			out[iri] = invalidTargets
-			// outExp[iri] = abbrAll(explanations)
-			result = false
+		if s.nodeShapes[i].IsActive() { // deactivated shapes do not factor the validation
+			iri := s.nodeShapes[i].GetIRI()
+			invalidTargets := s.InvalidTargets(iri, ep)
+			if len(invalidTargets.content) > 0 {
+				out[iri] = invalidTargets
+				// outExp[iri] = abbrAll(explanations)
+				result = false
+			}
 		}
 	}
 

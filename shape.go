@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	rdf "github.com/deiu/rdf2go"
+	"github.com/deiu/rdf2go"
 	"github.com/fatih/color"
 )
 
@@ -14,11 +14,13 @@ type Shape interface {
 	ToSparql(target string) SparqlQuery
 	GetIRI() string
 	GetDeps() []dependency
+	IsActive() bool
+	IsBlank() bool
 }
 
 // NodeShape
 type NodeShape struct {
-	IRI             rdf.Term                // the IRI of the subject term defining the shape
+	IRI             rdf2go.Term             // the IRI of the subject term defining the shape
 	valuetypes      []ValueTypeConstraint   // list of value type const`raints (sh:class, ...)
 	valueranges     []ValueRangeConstraint  // constraints on value ranges of matched values
 	stringconts     []StringBasedConstraint // for matched values, string-based constraints
@@ -31,14 +33,21 @@ type NodeShape struct {
 	nodes           []ShapeRef            // restrict the property universally to a shape
 	qualifiedShapes []QSConstraint        // restrict the property existentially to a given number of nodes to be matched
 	target          []TargetExpression    // the target expression on which to test the shape
-	hasValue        *rdf.Term             // restricts to the specified value
-	in              []rdf.Term            // restricts to the list of values (replace hasValue with this!)
+	hasValue        *rdf2go.Term          // restricts to the specified value
+	in              []rdf2go.Term         // restricts to the list of values (replace hasValue with this!)
 	closed          bool                  // specifies that the node shape must not have properties other than tested ones
-	ignored         []rdf.Term            // list of terms to ignore in closed
-	severity        *rdf.Term             // used in validation
-	message         *rdf.Term             // used in validation
+	ignored         []rdf2go.Term         // list of terms to ignore in closed
+	severity        *rdf2go.Term          // used in validation
+	message         *rdf2go.Term          // used in validation
 	deactivated     bool                  // if true, then shape is ignored in validation
 	deps            []dependency
+}
+
+func (n NodeShape) IsActive() bool { return !n.deactivated }
+
+func (n NodeShape) IsBlank() bool {
+	_, ok := n.IRI.(*rdf2go.BlankNode)
+	return ok
 }
 
 func (n NodeShape) GetDeps() []dependency { return n.deps }
@@ -59,7 +68,7 @@ func (n NodeShape) StringTab(a int) string {
 	bold := color.New(color.Bold)
 
 	switch n.IRI.(type) {
-	case *rdf.BlankNode:
+	case *rdf2go.BlankNode:
 		sb.WriteString(bold.Sprint(n.IRI))
 		sb.WriteString("(blank)")
 	default:
@@ -194,6 +203,8 @@ type PropertyShape struct {
 	shape    NodeShape    // underlying struct, used in both types of Shape
 }
 
+func (p PropertyShape) IsActive() bool { return p.shape.IsActive() }
+
 func (p PropertyShape) GetDeps() []dependency { return p.shape.deps }
 
 func (p PropertyShape) IsShape() {}
@@ -233,3 +244,7 @@ func (p PropertyShape) StringTab(a int) string {
 }
 
 func (p PropertyShape) GetIRI() string { return p.shape.GetIRI() }
+
+func (p PropertyShape) IsBlank() bool {
+	return p.shape.IsBlank()
+}

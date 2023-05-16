@@ -45,7 +45,7 @@ type DLVAnswer struct {
 }
 
 type DLVOutput struct {
-	Answers []DLVAnswer ` (String|Ident|Number|Punct) "{" ( @@ ","?)* "}" (String|Ident|Number|Punct) "{" (Number|Ident|String)*  "}" `
+	Answers []DLVAnswer ` (String|Ident|Number|Punct) "{" ( @@ ","?)* "}" (String|Ident|Number|Punct) "{" (Number|Ident|String|Punct|"("|")"|","|" ")*  "}" `
 }
 
 func (d DLVOutput) ToTables() (out []Table) {
@@ -99,6 +99,8 @@ func (p program) Answer() []Table {
 
 	cmd.Stdin = strings.NewReader(outLP)
 
+	fmt.Println("----\n\n,", outLP, "\n\n-------")
+
 	out, _ := cmd.Output()
 	// check(err)
 
@@ -110,6 +112,9 @@ func (p program) Answer() []Table {
 	var parsedDLVOutput DLVOutput
 	err := parser.ParseString(outString, &parsedDLVOutput)
 	if err != nil {
+
+		fmt.Println("----\n\n", outLP, "\n\n-------")
+
 		log.Panicln("input for parser: ", outString, "\n \n", err)
 	}
 
@@ -127,11 +132,15 @@ func (p program) String() string {
 		}
 	}
 
-	return strings.ToLower(removeAbbr(sb.String()))
+	return removeAbbr(sb.String())
 }
 
-func expandRules(values rdf.Term, indices []int, deps []dependency, head string) (out []rule) {
-	valuesSlice := strings.Split(values.RawValue(), " ")
+var qual int = 1
+
+func expandRules(values rdf.Term, indices []int, deps []dependency, header, element string) (out []rule) {
+	valuesSlice := strings.Split(strings.ToLower(values.RawValue()), " ")
+
+	head := fmt.Sprint(header, "(", strings.ToLower(element), ")")
 
 	for _, i := range indices {
 		switch deps[i].mode {
@@ -148,6 +157,9 @@ func expandRules(values rdf.Term, indices []int, deps []dependency, head string)
 				out = append(out, rule{head: head, body: body})
 			} else {
 				for j := range out {
+					if len(out[j].body) == 0 {
+						continue // don't attach stuff to facts
+					}
 					out[j].body = append(out[j].body, body...) // attach the ands to all prior rules
 				}
 			}
@@ -170,7 +182,11 @@ func expandRules(values rdf.Term, indices []int, deps []dependency, head string)
 				}
 			} else {
 				var newOut []rule
+			here:
 				for j := range out {
+					if len(out[j].body) == 0 {
+						continue here // don't attach stuff to facts
+					}
 					old := out[j]
 
 					for _, b := range bodyAll {
@@ -182,24 +198,102 @@ func expandRules(values rdf.Term, indices []int, deps []dependency, head string)
 				}
 			}
 		case not:
-			ref := deps[i].name[0] // not has only singular reference (in current design)
+			ref := deps[i].name[0].name // not has only singular reference (in current design)
 
 			var body []string
 			for _, v := range valuesSlice {
-				body = append(body, fmt.Sprint("not ", ref.name, "(", v, ")"))
+				body = append(body, fmt.Sprint("not ", ref, "(", v, ")"))
 			}
 
 			if len(out) == 0 {
 				out = append(out, rule{head: head, body: body})
 			} else {
 				for j := range out {
+					if len(out[j].body) == 0 {
+						continue // don't attach stuff to facts
+					}
 					out[j].body = append(out[j].body, body...) // attach negated values to prior rules
 				}
 			}
 
 		case xone: // will require some simple combinatorics
+			log.Panicln("XONE not supported yet")
 		case qualified: // will require crazy combinatorics
-			log.Panicln("Qualified Shape Value not supported yet")
+			ref := deps[i].name[0].name // like not, qualified can only have single reference
+
+			mark := fmt.Sprint("Qual", qual)
+			qual++
+
+			if len(out) == 0 {
+				// out = append(out, rule{head: head, body: []string{head}})
+			} else {
+				for j := range out {
+					if len(out[j].body) == 0 {
+						continue // don't attach stuff to facts
+					}
+
+					out[j].body = append(out[j].body, head) // attach qualfified to rule
+				}
+			}
+			// qualHead := fmt.Sprint(mark, "Head(", element, ")")
+
+			var tmp string
+			if deps[i].max != 0 {
+				tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min, ", K <= ", deps[i].max)
+			} else {
+				tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min)
+			}
+
+			qualifiedRule := rule{
+				head: head,
+				body: strings.Split(tmp, ", "),
+			}
+
+			tmp = fmt.Sprint("count", mark, "(X,K), not -count", mark, "Max(K)")
+			countMax1 := rule{
+				head: fmt.Sprint("count", mark, "Max(K)"),
+				body: strings.Split(tmp, ", "),
+			}
+
+			tmp = fmt.Sprint("count", mark, "(X,K), count", mark, "(Y,K+1)")
+			countMax2 := rule{
+				head: fmt.Sprint("-count", mark, "Max(K)"),
+				body: strings.Split(tmp, ", "),
+			}
+
+			tmp = fmt.Sprint("count", mark, "(Y,K-1), ", mark, "(X), ", ref,
+				"(X), Y < X, not -count", mark, "(X,K)")
+			countStep1 := rule{
+				head: fmt.Sprint("count", mark, "(X,K)"),
+				body: strings.Split(tmp, ", "),
+			}
+
+			tmp = fmt.Sprint("count", mark, "(Y,K-1), ", mark, "(X), ", ref,
+				"(X), Y < X, ", mark, "(Z), ", ref, "(Z), Y < Z, Z < X")
+			countStep2 := rule{
+				head: fmt.Sprint("-count", mark, "(X,K)"),
+				body: strings.Split(tmp, ", "),
+			}
+
+			tmp = fmt.Sprint(mark, "(X), ", ref, "(X), not -count", mark, "(X,1)")
+			countBase1 := rule{
+				head: fmt.Sprint("count", mark, "(X,1)"),
+				body: strings.Split(tmp, ", "),
+			}
+			tmp = fmt.Sprint(mark, "(X), ", ref, "(X), ", mark, "(Y), ", ref, "(Y), X > Y")
+			countBase2 := rule{
+				head: fmt.Sprint("-count", mark, "(X,1)"),
+				body: strings.Split(tmp, ", "),
+			}
+
+			rules := []rule{countBase1, countBase2, countStep1, countStep2, countMax1, countMax2, qualifiedRule}
+
+			out = append(out, rules...)
+			// attach facts to values to mark for counting
+			for _, v := range valuesSlice {
+				out = append(out, rule{head: fmt.Sprint(mark, "(", v, ")")})
+			}
+
 		}
 	}
 
@@ -270,7 +364,7 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bo
 	for _, row := range table.content {
 		element := row[0].RawValue()
 
-		generalRuleNew := generalRule.rewrite("VAR", element)
+		generalRuleNew := generalRule.rewrite("VAR", strings.ToLower(element))
 		out.rules = append(out.rules, generalRuleNew)
 
 		var tempRules []rule // collection of all rules generated so far
@@ -278,12 +372,12 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bo
 		for i, values := range row {
 			if i == 0 {
 				if internalDeps {
-					tempRules = expandRules(values, attrMap[i], deps, table.header[i]+"INTERN( "+element+" )")
+					tempRules = expandRules(values, attrMap[i], deps, table.header[i]+"INTERN", element)
 				}
 				continue
 			}
 
-			tempRules = expandRules(values, attrMap[i], deps, table.header[i]+"( "+element+" )")
+			tempRules = expandRules(values, attrMap[i], deps, table.header[i], element)
 		}
 
 		out.rules = append(out.rules, tempRules...)

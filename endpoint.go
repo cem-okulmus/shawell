@@ -120,6 +120,8 @@ func (t Table) Limit(n int) string {
 	if n < len(t.content) {
 		fmt.Fprint(w, "\n\n\t\t⋮ (showing first ",
 			n, " lines from ", len(t.content), " total) \n")
+	} else {
+		fmt.Fprint(w, "\n\t\t ( Total: ", len(t.content), " lines) \n")
 	}
 
 	err := w.Flush()
@@ -175,6 +177,8 @@ func (s SparqlEndpoint) Answer(ns *Shape, target string) Table {
 	res, err := s.repo.Query(query.String())
 	check(err)
 
+	fmt.Println("Query:  \n", query)
+
 	return GetTable(res)
 }
 
@@ -184,7 +188,7 @@ func (s SparqlEndpoint) Query(query string) Table {
 	res, err := s.repo.Query(query)
 	check(err)
 
-	// fmt.Println("Query:  \n", query)
+	fmt.Println("Query:  \n", query)
 
 	return GetTable(res)
 }

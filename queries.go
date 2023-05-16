@@ -104,10 +104,6 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 
 	var sb strings.Builder
 
-	if universalOnly {
-		sb.WriteString("OPTIONAL { \n")
-	}
-
 	// add the headers nedded in outer query
 
 	// head = append(head, fmt.Sprint("(COUNT(DISTINCT ?InnerObj", num, ") AS ?countObj", num, ")"))
@@ -115,16 +111,19 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 
 	// most important thing: The path expression
 
+	if universalOnly {
+		sb.WriteString("OPTIONAL { \n")
+	}
 	sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
+
+	if universalOnly {
+		sb.WriteString("} \n")
+	}
 
 	// inner body parts
 	for i := range bodyParts {
 		sb.WriteString(bodyParts[i])
 		sb.WriteString("\n\t")
-	}
-
-	if universalOnly {
-		sb.WriteString("} \n")
 	}
 
 	// {  # For every predicate expression with

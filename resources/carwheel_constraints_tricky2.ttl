@@ -1,0 +1,14 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dbr: <https://dbpedia.org/resource/> .
+@prefix dbo: <https://dbpedia.org/ontology/> .
+
+
+sh:CarShape
+	a sh:NodeShape ;
+	sh:targetClass dbr:Vehicle ;	
+	sh:not [
+				sh:not sh:CarShape;
+	].
+
+

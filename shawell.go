@@ -198,7 +198,8 @@ func main() {
 	check(err)
 
 	g2 := rdf.NewGraph(_sh)
-	g2.Parse(shaclDoc, "text/turtle")
+	err = g2.Parse(shaclDoc, "text/turtle")
+	check(err)
 
 	GetNameSpace(shaclDoc)
 
@@ -209,20 +210,29 @@ func main() {
 
 	parsedDoc.AllCondAnswers(endpoint)
 
+	// for k,v := range parsedDoc.condAnswers {
+	// 	fmt.Println("TABLE: ", k)
+	// 	fmt.Println(v)
+	// }
+
 	lp := parsedDoc.GetAllLPs()
 	// fmt.Println("Get LP for document: ", lp)
 
-	res, invalidTargets := parsedDoc.Validate(endpoint)
+	if parsedDoc.IsRecursive() {
+		fmt.Println("Recursive document parsed, tranforming to LP and sending off to DLV.")
+		
+		lpTables := lp.Answer()
+		fmt.Println("Answer from DLV: ")
+		for i := range lpTables {
+			fmt.Println(lpTables[i].Limit(5))
+		}
+	} else {
+		res, invalidTargets := parsedDoc.Validate(endpoint)
 
-	fmt.Println("Shacl Document valid: ", res)
+		fmt.Println("Shacl Document valid: ", res)
 
-	for k, v := range invalidTargets {
-		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(5))
-	}
-
-	lpTables := lp.Answer()
-	fmt.Println("Answer from DLV: ")
-	for i := range lpTables {
-		fmt.Println(lpTables[i].Limit(5))
+		for k, v := range invalidTargets {
+			fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(100))
+		}
 	}
 }
