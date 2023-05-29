@@ -810,15 +810,16 @@ func (s *ShaclDocument) ExtractQSConstraint(graph *rdf2go.Graph, triple *rdf2go.
 		check(err)
 	}
 	if disjoint != nil {
-		tmp := disjoint.Object.RawValue()
-		switch tmp {
-		case "true":
-			out.disjoint = true
-		case "false":
-			out.disjoint = false
-		default:
-			log.Panicln("qualifiedValueShapesDisjoint not using proper value: ", disjoint)
-		}
+		log.Panicln("qualifiedValueShapesDisjoint option is not supported at this moment.")
+		// tmp := disjoint.Object.RawValue()
+		// switch tmp {
+		// case "true":
+		// 	out.disjoint = true
+		// case "false":
+		// 	out.disjoint = false
+		// default:
+		// 	log.Panicln("qualifiedValueShapesDisjoint not using proper value: ", disjoint)
+		// }
 	}
 
 	if (minTriple == nil) && (maxTriple == nil) {

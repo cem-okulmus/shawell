@@ -140,7 +140,11 @@ var qual int = 1
 func expandRules(values rdf.Term, indices []int, deps []dependency, header, element string) (out []rule) {
 	valuesSlice := strings.Split(strings.ToLower(values.RawValue()), " ")
 
-	head := fmt.Sprint(header, "(", strings.ToLower(element), ")")
+	for i := range valuesSlice {
+		valuesSlice[i] = "\"" + valuesSlice[i] + "\""
+	}
+
+	head := fmt.Sprint(header, "(\"", strings.ToLower(element), "\")")
 
 	for _, i := range indices {
 		switch deps[i].mode {
@@ -364,7 +368,7 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bo
 	for _, row := range table.content {
 		element := row[0].RawValue()
 
-		generalRuleNew := generalRule.rewrite("VAR", strings.ToLower(element))
+		generalRuleNew := generalRule.rewrite("VAR", "\""+strings.ToLower(element)+"\"")
 		out.rules = append(out.rules, generalRuleNew)
 
 		var tempRules []rule // collection of all rules generated so far
@@ -440,7 +444,12 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 }
 
 func (s ShaclDocument) GetAllLPs() (out program) {
-	for name := range s.shapeNames {
+	for name, value := range s.shapeNames {
+
+		if !(*value).IsActive() {
+			continue
+		}
+
 		outTmp := s.GetOneLP(name)
 
 		out.rules = append(out.rules, outTmp.rules...)

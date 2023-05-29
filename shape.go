@@ -11,7 +11,7 @@ import (
 type Shape interface {
 	IsShape()
 	String() string
-	ToSparql(target string) SparqlQuery
+	ToSparql(target SparqlQuery) SparqlQuery
 	GetIRI() string
 	GetDeps() []dependency
 	IsActive() bool
@@ -177,6 +177,10 @@ func (n NodeShape) StringTab(a int) string {
 
 	if n.hasValue != nil {
 		sb.WriteString(fmt.Sprint(_sh, "hasValue ", *n.hasValue, tab))
+	}
+
+	if !n.IsActive() {
+		sb.WriteString(red.Sprint(_sh, "deactivated true", tab))
 	}
 
 	var inStrings []string

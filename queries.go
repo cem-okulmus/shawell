@@ -14,7 +14,7 @@ import (
 
 // ToSparql produces a stand-alone sparql query that produces the list of nodes satisfying the
 // shape in the RDF graph
-func (p PropertyShape) ToSparql(target string) (out SparqlQuery) {
+func (p PropertyShape) ToSparql(target SparqlQuery) (out SparqlQuery) {
 	// this will basically just call ToSubquery, but instead turn it into an object of type
 	// SparqlQuery, corresponding to a single node shape only having this property as a constraint
 
@@ -55,6 +55,12 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 		universalOnly = false
 		tmp := fmt.Sprint("( ", p.minCount, " <= COUNT(DISTINCT ?InnerObj", num, ") )")
 		having = append(having, tmp)
+	}
+
+	for i := range p.shape.qualifiedShapes {
+		if p.shape.qualifiedShapes[i].min != 0 {
+			universalOnly = false
+		}
 	}
 
 	// UNIVERSAL
@@ -144,7 +150,7 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 // other nodes expressiong a conditional shape dependency such that any
 // potential node is only satisfied if and only if the conditional nodes have
 // or do not have the specified shapes.
-func (n NodeShape) ToSparql(target string) (out SparqlQuery) {
+func (n NodeShape) ToSparql(target SparqlQuery) (out SparqlQuery) {
 	var vars []string
 	var head []string // variables and renamings appearing inside the SELECT statement
 	var body []string // statements that form the inside of the WHERE clause
@@ -159,9 +165,26 @@ func (n NodeShape) ToSparql(target string) (out SparqlQuery) {
 
 	// initial := "{?sub ?pred ?obj. }\n\tUNION\n\t{?objI ?predI ?sub.}"
 
-	body = append(body, fmt.Sprint("{\n\t", target, "\n\t}"))
+	body = append(body, fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}"))
 
-	// TODO: all other constraints at node shape level
+	if n.hasValue != nil {
+		out := fmt.Sprint("FILTER ( ?sub = ", (*n.hasValue).String(), " ) .")
+
+		body = append(body, out)
+	}
+
+	// UNIVERSAL
+
+	for i := range n.valuetypes {
+		body = append(body, n.valuetypes[i].SparqlBody("sub", ""))
+	}
+	for i := range n.valueranges {
+		body = append(body, n.valueranges[i].SparqlBody("sub", ""))
+	}
+	for i := range n.stringconts {
+		body = append(body, n.stringconts[i].SparqlBody("sub", ""))
+	}
+	// leaving out property pair constraints; cannot appear inside node shape
 
 	for i, p := range n.properties {
 		headP, bodyP, havingP := p.ToSubquery(i)

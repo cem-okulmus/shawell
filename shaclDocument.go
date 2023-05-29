@@ -308,6 +308,13 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 	outer:
 		for k, v := range s.shapeNames {
 
+			fmt.Println("Current shape ", k)
+
+			if !(*v).IsActive() {
+				continue
+			}
+
+			// TODO: currently asking target query twice, optimise this to only send one
 			_, ok := s.targets[k]
 			if !ok {
 				// compute targets before computing the query, if not already done
@@ -352,10 +359,10 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 
 			deps := (*v).GetDeps()
 			for i := range deps {
-
-				if !deps[i].external {
-					continue // no need to add targets for internal dependency
-				}
+				// if !deps[i].external {
+				// 	fmt.Println("Dep ", deps[i].name, " for shape ", k, " is internal. skip")
+				// 	continue // no need to add targets for internal dependency
+				// }
 
 				for _, ref := range deps[i].name {
 
@@ -787,7 +794,7 @@ func (s *ShaclDocument) GetTargetTerm(t TargetExpression) string {
 
 // GetTargetShape produces the subquery needed to reduce the focus nodes to those described
 // in the target expressions, understood as the union overall target expressions.
-func (s *ShaclDocument) GetTargetShape(name string) (out string) {
+func (s *ShaclDocument) GetTargetShape(name string) (out SparqlQuery) {
 	var targets []TargetExpression
 
 	ns, ok := s.shapeNames[name]
@@ -814,16 +821,33 @@ func (s *ShaclDocument) GetTargetShape(name string) (out string) {
 		targets = append(targets, TargetIndirect{terms: keys})
 	}
 
+	out.head = append(out.head, "?sub")
+
+	var body string
+
 	if len(targets) > 0 {
 		var queries []string
 
 		for i := range targets {
-			queries = append(queries, s.GetTargetTerm(targets[i]))
+			term := s.GetTargetTerm(targets[i])
+			term = strings.ReplaceAll(term, "(", "\\(")
+			term = strings.ReplaceAll(term, ")", "\\)")
+			queries = append(queries, term)
 		}
-		out = fmt.Sprint("SELECT DISTINCT ?sub {\n\t {", strings.Join(queries, "}\n UNION \n{"), "} \n}")
-	} else { // produce a dummy empty select
-		out = "SELECT ?sub { {?sub ?targetPred ?targetObj.} UNION  {?taretObjI ?targetPredI ?sub.}  }"
+
+		// doing a more complex UNION to improve compatbility with DBPedia Sparql endpoint
+
+		var temps []string
+
+		for i := range queries {
+			temps = append(temps, fmt.Sprint("{SELECT ?sub {\n\t", queries[i], "\n}}"))
+		}
+
+		body = fmt.Sprint("\n", strings.Join(temps, "\nUNION\n"), "\n")
+
 	}
+
+	out.body = append(out.body, body)
 
 	return out
 }

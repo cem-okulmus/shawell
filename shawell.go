@@ -76,8 +76,12 @@ func GetNameSpace(file *os.File) {
 
 func abbr(in string) string {
 	for k, v := range prefixes {
+		in = strings.ReplaceAll(in, ">=", "🤔️")
+		in = strings.ReplaceAll(in, "<=", "😀️")
 		in = strings.ReplaceAll(in, ">", "")
 		in = strings.ReplaceAll(in, "<", "")
+		in = strings.ReplaceAll(in, "🤔️", ">=")
+		in = strings.ReplaceAll(in, "😀️", "<=")
 		in = strings.ReplaceAll(in, v, k)
 	}
 
@@ -148,9 +152,6 @@ var ResA = res(_rdf + "type")
 //    - incorporate the implicit target semantics
 //    - introduce indirect targets as a data structure
 //    - extraction of indirect targets from a Table
-
-// TODO:
-
 // * Test out recursion, and compare behaviour with other solvers
 //   - recreate the (s <- s; s <- not not s) case in shacl and check the behaviour
 //   - find a list of validators out there supporting recursion
@@ -158,17 +159,28 @@ var ResA = res(_rdf + "type")
 //    - support for recursion, and iterated indirect target passing
 // * support more of basic SHACL
 //   - sh:qualifiedValue (min + max)
-//   - sh:ignoredProperties (for sh:closed)
-//   - sh:closed
 //   - sh:xone
 //   - sh:or
+//  * support of deactivating a shape (should be easy)
+// * Getting solver into shape for JELIA
+//   - test maxCount when empty value set (use !BOUND || )
+
+// TODO:
+// * Getting solver into shape for JELIA
+//   - check if qualifiedValueShape actually works, in non-recursive example
+//   - create example that supports well-founded recursion, and explain briefly why most examples will
+//   lead to empty set under well-founded semantics
+//   - clean up the output, remove all debug printing, and produce a clear result of the validation
+//     to the user.
 
 // LOW PRIORITY TODO:
+// * support more of basic SHACL
+//   - sh:ignoredProperties (for sh:closed)
+//   - sh:closed
 //  * Produce proper validation reports in RDF
 //   - support severity
 //   - result message
 //   - the various properties (value, source, path, focus, constraint)
-//  * deactivating a shape (should be easy)
 
 func main() {
 	// ==============================================
@@ -220,7 +232,7 @@ func main() {
 
 	if parsedDoc.IsRecursive() {
 		fmt.Println("Recursive document parsed, tranforming to LP and sending off to DLV.")
-		
+
 		lpTables := lp.Answer()
 		fmt.Println("Answer from DLV: ")
 		for i := range lpTables {

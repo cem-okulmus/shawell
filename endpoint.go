@@ -142,7 +142,15 @@ func GetTable(r *sparql.Results) Table {
 		var tupleOrdered []rdf.Term = make([]rdf.Term, len(t))
 
 		for k, v := range t {
+			if v.String() == "" {
+				continue
+			}
+
 			tupleOrdered[ordering[k]] = res(v.String()) // needed since range over map unsorted
+		}
+
+		if len(tupleOrdered) == 0 {
+			continue
 		}
 
 		resultTable = append(resultTable, tupleOrdered)
@@ -152,8 +160,8 @@ func GetTable(r *sparql.Results) Table {
 }
 
 type endpoint interface {
-	Answer(ns *Shape, target string) Table
-	Query(s string) Table
+	Answer(ns *Shape, target SparqlQuery) Table
+	Query(s SparqlQuery) Table
 }
 
 type SparqlEndpoint struct {
@@ -163,7 +171,7 @@ type SparqlEndpoint struct {
 func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
 	repo, err := sparql.NewRepo(address,
 		sparql.DigestAuth(username, password),
-		sparql.Timeout(time.Millisecond*1500),
+		sparql.Timeout(time.Second*10),
 	)
 	check(err)
 
@@ -171,23 +179,28 @@ func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
 }
 
 // Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
-func (s SparqlEndpoint) Answer(ns *Shape, target string) Table {
+func (s SparqlEndpoint) Answer(ns *Shape, target SparqlQuery) Table {
 	query := (*ns).ToSparql(target)
 	// fmt.Println("Query: \n", query.String())
 	res, err := s.repo.Query(query.String())
-	check(err)
+	if err != nil {
+		fmt.Println("Query in question:\n ", query)
+		panic(err)
+	}
 
 	fmt.Println("Query:  \n", query)
 
 	return GetTable(res)
 }
 
-// Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
-func (s SparqlEndpoint) Query(query string) Table {
+// Answer takes as input a NodeShape, and runs its Ssparql query against the endpoint
+func (s SparqlEndpoint) Query(query SparqlQuery) Table {
 	// query := ns.ToSparql()
-	res, err := s.repo.Query(query)
-	check(err)
-
+	res, err := s.repo.Query(query.String())
+	if err != nil {
+		fmt.Println("Query in question:\n ", query.String())
+		panic(err)
+	}
 	fmt.Println("Query:  \n", query)
 
 	return GetTable(res)

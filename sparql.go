@@ -34,12 +34,18 @@ type SparqlQuery struct {
 }
 
 func (s SparqlQuery) String() string {
+	return s.StringPrefix(true) // by default, always include prefixes
+}
+
+func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 	var sb strings.Builder
 
 	// attach prefixes
 
-	for k, v := range prefixes {
-		sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+	if attachPrefix {
+		for k, v := range prefixes {
+			sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+		}
 	}
 
 	sb.WriteString("\n\n")
@@ -57,9 +63,10 @@ func (s SparqlQuery) String() string {
 	sb.WriteString(strings.Join(abbrAll(s.body), "\n\t"))
 
 	sb.WriteString("} \n")
-	sb.WriteString("GROUP BY ")
-	sb.WriteString(strings.Join(abbrAll(s.group), " "))
-
+	if len(s.group) > 0 {
+		sb.WriteString("GROUP BY ")
+		sb.WriteString(strings.Join(abbrAll(s.group), " "))
+	}
 	if len(s.having) > 0 {
 		sb.WriteString("\nHAVING (")
 		sb.WriteString(strings.Join(abbrAll(s.having), " && "))
