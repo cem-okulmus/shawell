@@ -16,6 +16,7 @@ import (
 // GetTable returns from a query result a table, and a header of shape names
 
 type Table struct {
+	query   SparqlQueryFlat // the _flattened_ query  which generated the Table
 	header  []string
 	content [][]rdf.Term
 	cache   []string
@@ -160,8 +161,10 @@ func GetTable(r *sparql.Results) Table {
 }
 
 type endpoint interface {
-	Answer(ns *Shape, target SparqlQuery) Table
+	Answer(ns *Shape, target SparqlQueryFlat) Table
 	Query(s SparqlQuery) Table
+	QueryFlat(s SparqlQueryFlat) Table
+	QueryAsk(s string) bool
 }
 
 type SparqlEndpoint struct {
@@ -171,7 +174,7 @@ type SparqlEndpoint struct {
 func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
 	repo, err := sparql.NewRepo(address,
 		sparql.DigestAuth(username, password),
-		sparql.Timeout(time.Second*10),
+		sparql.Timeout(time.Second*600),
 	)
 	check(err)
 
@@ -179,7 +182,7 @@ func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
 }
 
 // Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
-func (s SparqlEndpoint) Answer(ns *Shape, target SparqlQuery) Table {
+func (s SparqlEndpoint) Answer(ns *Shape, target SparqlQueryFlat) Table {
 	query := (*ns).ToSparql(target)
 	// fmt.Println("Query: \n", query.String())
 	res, err := s.repo.Query(query.String())
@@ -188,12 +191,14 @@ func (s SparqlEndpoint) Answer(ns *Shape, target SparqlQuery) Table {
 		panic(err)
 	}
 
-	fmt.Println("Query:  \n", query)
+	// fmt.Println("Query:  \n", query)
 
-	return GetTable(res)
+	out := GetTable(res)
+
+	out.query = (*ns).ToSparqlFlat(target)
+	return out
 }
 
-// Answer takes as input a NodeShape, and runs its Ssparql query against the endpoint
 func (s SparqlEndpoint) Query(query SparqlQuery) Table {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query.String())
@@ -201,7 +206,38 @@ func (s SparqlEndpoint) Query(query SparqlQuery) Table {
 		fmt.Println("Query in question:\n ", query.String())
 		panic(err)
 	}
-	fmt.Println("Query:  \n", query)
+	// fmt.Println("Query:  \n", query)
 
-	return GetTable(res)
+	out := GetTable(res)
+
+	// out.query = query
+	return out
+}
+
+func (s SparqlEndpoint) QueryFlat(query SparqlQueryFlat) Table {
+	// query := ns.ToSparql()
+	res, err := s.repo.Query(query.String())
+	if err != nil {
+		fmt.Println("Query in question:\n ", query.String())
+		panic(err)
+	}
+	// fmt.Println("QueryFLAT:  \n", query)
+
+	out := GetTable(res)
+	// fmt.Println("Result: \n", out)
+
+	// out.query = query
+	return out
+}
+
+func (s SparqlEndpoint) QueryAsk(query string) bool {
+	// query := ns.ToSparql()
+	res, err := s.repo.Query(query)
+	if err != nil {
+		fmt.Println("Query in question:\n ", query)
+		panic(err)
+	}
+	// fmt.Println("Query:  \n", query)
+
+	return res.Boolean
 }

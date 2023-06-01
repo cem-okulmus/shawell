@@ -416,6 +416,14 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 	}
 
 	condTable, ok := s.condAnswers[name]
+
+	// fmt.Println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+	// fmt.Println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+	// fmt.Println("Cond Table used in LP transformation; shape ", name)
+	// fmt.Println("Table: \n ", condTable)
+	// fmt.Println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+	// fmt.Println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+
 	if !ok {
 		log.Panic("conditional Answer for shape has not been produced yet", name)
 	}
@@ -435,11 +443,11 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 
 	// check if it is indeed a conditional table
 	if len(condTable.content[0]) == 1 && !areInternalDeps {
-		fmt.Println("Shape: ", name, " had already uncond Table.")
+		// fmt.Println("Shape: ", name, " had already uncond Table.")
 		return s.FactsToLP(condTable)
 	}
 
-	fmt.Println("For shape ", name, " computing LP with deps ", deps)
+	// fmt.Println("For shape ", name, " computing LP with deps ", deps)
 	return s.TableToLP(condTable, deps, areInternalDeps)
 }
 

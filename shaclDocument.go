@@ -8,8 +8,6 @@ import (
 
 	rdf "github.com/deiu/rdf2go"
 	"github.com/fatih/color"
-
-	"golang.org/x/exp/maps"
 )
 
 type depMode int32
@@ -35,12 +33,12 @@ var Empty struct{}
 
 type ShaclDocument struct {
 	nodeShapes     []Shape
-	shapeNames     map[string]*Shape              // used to unwind references to shapes
-	condAnswers    map[string]Table               // for each NodeShape, its (un)conditional answer
-	uncondAnswers  map[string]Table               // caches the results from unwinding
-	origTargets    map[string][]rdf.Term          // cache the original result for cache
-	targets        map[string]map[string]struct{} // caches for targets
-	indirectTarget map[string]map[string]struct{} // stores for each shape the indirect Targets, due to deps
+	shapeNames     map[string]*Shape           // used to unwind references to shapes
+	condAnswers    map[string]Table            // for each NodeShape, its (un)conditional answer
+	uncondAnswers  map[string]Table            // caches the results from unwinding
+	origTargets    map[string][]rdf.Term       // cache the original result for cache
+	targets        map[string]*SparqlQueryFlat // caches for targets
+	indirectTarget map[string]bool             // stores for each shape the indirect Targets, due to deps
 	answered       bool
 	validated      bool
 }
@@ -104,8 +102,8 @@ func GetShaclDocument(rdfGraph *rdf.Graph) (out ShaclDocument) {
 	out.condAnswers = make(map[string]Table)
 	out.uncondAnswers = make(map[string]Table)
 	out.origTargets = make(map[string][]rdf.Term)
-	out.indirectTarget = make(map[string]map[string]struct{})
-	out.targets = make(map[string]map[string]struct{})
+	out.indirectTarget = make(map[string]bool)
+	out.targets = make(map[string]*SparqlQueryFlat)
 
 	NodeShapeTriples := rdfGraph.All(nil, ResA, res(_sh+"NodeShape"))
 	// fmt.Println(res(sh+"NodeShape"), " of node shapes, ", NodeShapeTriples)
@@ -282,7 +280,7 @@ func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool
 func (s ShaclDocument) ToSparql() (out []SparqlQuery) {
 	for i := range s.nodeShapes {
 
-		target := s.GetTargetShape(s.nodeShapes[i].GetIRI())
+		target, _ := s.GetTargetShape(s.nodeShapes[i].GetIRI())
 
 		out = append(out, s.nodeShapes[i].ToSparql(target))
 	}
@@ -308,7 +306,7 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 	outer:
 		for k, v := range s.shapeNames {
 
-			fmt.Println("Current shape ", k)
+			// fmt.Println("Current shape ", k)
 
 			if !(*v).IsActive() {
 				continue
@@ -320,25 +318,32 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 				// compute targets before computing the query, if not already done
 				s.GetTargets(k, ep)
 			} else {
-				if m, ok := s.indirectTarget[k]; ok {
-					if len(m) == 0 {
-						continue outer // don't query if no new indirect targets
-					}
+				m, ok := s.indirectTarget[k]
+
+				if !ok || !m {
+					continue outer // don't query if no new indirect targets
 				}
+
 			}
 
-			target := s.GetTargetShape(k)
+			// if m, ok := s.indirectTarget[k]; ok && m {
+
+			// 	// fmt.Println("Writing into target of shape", k)
+
+			// 	if s.targets[k] == nil {
+			// 		// fmt.Println("Writing into shape ", k, " value ")
+			// 		s.targets[k] = m
+			// 	} else {
+			// 		newQuery := s.targets[k].Merge(*m)
+			// 		// fmt.Println("Writing into shape ", k)
+			// 		s.targets[k] = &newQuery
+			// 	}
+
+			s.indirectTarget[k] = false
+			// }
+
+			target, _ := s.GetTargetShape(k)
 			out := ep.Answer(v, target)
-
-			if m, ok := s.indirectTarget[k]; ok {
-
-				for i := range m {
-					s.targets[k][i] = Empty
-				}
-
-				maps.Clear(m)
-				s.indirectTarget[k] = m
-			}
 
 			// fmt.Println(k, "  for dep ", v.name, " we got the uncond answers ", out.LimitString(5))
 
@@ -366,30 +371,72 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 
 				for _, ref := range deps[i].name {
 
-					fmt.Println("Checking dep on ", ref.name, " for shape ", k)
+					// fmt.Println("Checking dep on ", ref.name, " for shape ", k)
 
-					indirectTargets := s.GetIndirectTargets(ref, deps[i], out)
+					foundSomething := false
 
-					fmt.Println("Found ", len(indirectTargets), " targets")
+					foundSomething, attr, external := s.GetIndirectTargets(ref, deps[i], out)
 
-					for i := range indirectTargets {
-						indirectString := indirectTargets[i].RawValue()
-						if _, ok := s.targets[ref.name][indirectString]; !ok {
+					// fmt.Println("Found ", len(indirectTargets), " targets")
+					// fmt.Println("Found some indirect targets: ", foundSomething)
 
+					// for i := range indirectTargets {
+					// 	indirectString := indirectTargets[i].RawValue()
+					// 	if _, ok := s.targets[ref.name][indirectString]; !ok {
+
+					// 		foundNewIndirect = true
+
+					// 		if _, ok := s.indirectTarget[ref.name]; !ok {
+					// 			s.indirectTarget[ref.name] = make(map[string]struct{})
+					// 		}
+					// 		s.indirectTarget[ref.name][indirectString] = Empty
+					// 	}
+					// }
+
+					if foundSomething {
+
+						newQuery := out.query.ProjectToVar(fmt.Sprint("InnerObj", attr), external)
+
+						m, ok := s.targets[ref.name]
+
+						if !ok || m == nil { // no targets, thus any indirect targets may be added
+							// fmt.Println("initial indirect for shape", ref.name, m == nil)
+
+							s.targets[ref.name] = MergeGeneral(s.targets[ref.name], &newQuery)
+							s.indirectTarget[ref.name] = true
+
+							// fmt.Println(s.indirectTarget[ref.name])
 							foundNewIndirect = true
 
-							if _, ok := s.indirectTarget[ref.name]; !ok {
-								s.indirectTarget[ref.name] = make(map[string]struct{})
+							// fmt.Println("-----------------------------")
+							// fmt.Println("Found new indirectTargets for shape ", ref.name)
+							// fmt.Println("-----------------------------")
+						}
+
+						if ok && m != nil {
+
+							// if s.targets[ref.name] == nil { // no old targets
+
+							// 	s.indirectTarget[ref.name] = MergeGeneral(s.indirectTarget[ref.name], &newQuery)
+							// 	foundNewIndirect = true
+							// } else {
+							subsumed := s.targets[ref.name].Contained(newQuery, ep)
+
+							if !subsumed {
+								foundNewIndirect = true
+								s.targets[ref.name] = MergeGeneral(s.targets[ref.name], &newQuery)
+								s.indirectTarget[ref.name] = true
 							}
-							s.indirectTarget[ref.name][indirectString] = Empty
+
 						}
 					}
 
-					if foundNewIndirect {
-						fmt.Println("-----------------------------")
-						fmt.Println("Found new indirectTargets for shape ", ref.name)
-						fmt.Println("-----------------------------")
-					}
+					// if foundNewIndirect {
+
+					// 	fmt.Println("-----------------------------")
+					// 	fmt.Println("Found new indirectTargets for shape ", ref.name)
+					// 	fmt.Println("-----------------------------")
+					// }
 
 				}
 			}
@@ -450,8 +497,8 @@ func symmetricDiff[T comparable](sliceListA, sliceListB []T) []T {
 	return list
 }
 
-func (s *ShaclDocument) GetIndirectTargets(ref ShapeRef, dep dependency, condTable Table) []rdf.Term {
-	var indirectTargets []rdf.Term
+func (s *ShaclDocument) GetIndirectTargets(ref ShapeRef, dep dependency, condTable Table) (bool, int, bool) {
+	// var indirectTargets []rdf.Term
 
 	var c int // column to compare
 
@@ -470,18 +517,28 @@ func (s *ShaclDocument) GetIndirectTargets(ref ShapeRef, dep dependency, condTab
 		c = 0 // intrinsic checks are made against the node shape itself
 	}
 
+	existIndirectTargets := false
+
 	// fmt.Println("Dep ", dep.name, " is of type list: ", isList)
 	for i := range condTable.content {
 		cont := condTable.content[i][c]
 		splitCont := strings.Split(cont.RawValue(), " ")
 
-		for j := range splitCont {
-			indirectTargets = append(indirectTargets, res(splitCont[j]))
+		if len(splitCont) > 0 {
+			existIndirectTargets = true
+
+			// fmt.Println("||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
+			// fmt.Println("||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
+			// fmt.Println("CONTENT: \n", condTable)
+			// fmt.Println("||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
+			// fmt.Println("||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
+
+			break
 		}
 
 	}
 
-	return indirectTargets
+	return existIndirectTargets, c - 1, dep.external
 }
 
 func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondTable Table, min, max int) []int {
@@ -785,7 +842,19 @@ func (s *ShaclDocument) GetTargetTerm(t TargetExpression) string {
 	case TargetIndirect:
 		t := t.(TargetIndirect)
 
-		queryBody = fmt.Sprint("VALUES ?sub {", strings.Join(t.terms, " "), "}")
+		if len(t.query.body) != 1 {
+			log.Panicln("Target query with more than one body!")
+		}
+
+		// variable, ok := t.query.refToVar[t.reference]
+		// if !ok {
+		// 	log.Panicln("No mapping to variable for needed reference ", t.reference)
+		// }
+		// t.query.head = []string{fmt.Sprint("( ", variable, " AS ?sub )")}
+
+		queryBody = t.query.StringPrefix(false)
+
+		// queryBody = strings.Join(t.query.body, "\n")
 
 	}
 
@@ -794,7 +863,7 @@ func (s *ShaclDocument) GetTargetTerm(t TargetExpression) string {
 
 // GetTargetShape produces the subquery needed to reduce the focus nodes to those described
 // in the target expressions, understood as the union overall target expressions.
-func (s *ShaclDocument) GetTargetShape(name string) (out SparqlQuery) {
+func (s *ShaclDocument) GetTargetShape(name string) (out SparqlQueryFlat, empty bool) {
 	var targets []TargetExpression
 
 	ns, ok := s.shapeNames[name]
@@ -809,6 +878,8 @@ func (s *ShaclDocument) GetTargetShape(name string) (out SparqlQuery) {
 		targets = (*ns).(PropertyShape).shape.target
 	}
 
+	empty = len(targets) == 0
+
 	// handle implicit class targets
 
 	if !(*ns).IsBlank() {
@@ -816,12 +887,22 @@ func (s *ShaclDocument) GetTargetShape(name string) (out SparqlQuery) {
 	}
 
 	// handle indirect targets:
-	if v, ok := s.indirectTarget[name]; ok {
-		keys := maps.Keys(v)
-		targets = append(targets, TargetIndirect{terms: keys})
+
+	if v, ok := s.targets[name]; ok && v != nil {
+		// keys := maps.Keys(v)
+
+		// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		// fmt.Println("Shape ", name)
+
+		// fmt.Println("Query inside TargetIndirect: ", v.String())
+		// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+
+		targets = append(targets, TargetIndirect{query: *v, reference: name})
 	}
 
-	out.head = append(out.head, "?sub")
+	out.head = "?sub"
 
 	var body string
 
@@ -830,8 +911,19 @@ func (s *ShaclDocument) GetTargetShape(name string) (out SparqlQuery) {
 
 		for i := range targets {
 			term := s.GetTargetTerm(targets[i])
-			term = strings.ReplaceAll(term, "(", "\\(")
-			term = strings.ReplaceAll(term, ")", "\\)")
+
+			_, ok := targets[i].(TargetIndirect)
+
+			if !ok { // don't mess with the query in case of indirect targets
+				term = strings.ReplaceAll(term, "(", "\\(")
+				term = strings.ReplaceAll(term, ")", "\\)")
+				term = strings.ReplaceAll(term, "'", "\\'")
+				term = strings.ReplaceAll(term, "Jr.", "Jr\\.")
+				term = strings.ReplaceAll(term, "&", "\\&")
+				term = strings.ReplaceAll(term, ",", "\\,")
+			}
+
+			// term = strings.ReplaceAll(term, "&", "\\&")
 			queries = append(queries, term)
 		}
 
@@ -849,30 +941,35 @@ func (s *ShaclDocument) GetTargetShape(name string) (out SparqlQuery) {
 
 	out.body = append(out.body, body)
 
-	return out
+	return out, empty
 }
 
 func (s *ShaclDocument) GetTargets(name string, ep endpoint) {
 	var out Table
-	// check if result is already cached
-	if _, ok := s.targets[name]; ok {
+	// // check if result is already cached
+	// if _, ok := s.targets[name]; ok {
+	// 	return
+	// }
+
+	query, empty := s.GetTargetShape(name)
+	if empty {
+		// fmt.Println("Setting nil to target sof shape ", name)
+		s.targets[name] = nil
 		return
 	}
+	// fmt.Println("|||||||||||||||||||||||||||||||")
+	// fmt.Println("Shape ", name, " has non-empty targets")
+	// fmt.Println("|||||||||||||||||||||||||||||||")
 
-	query := s.GetTargetShape(name)
+	s.targets[name] = &query
 
-	// cache the result
-	out = ep.Query(query)
-	s.targets[name] = make(map[string]struct{})
+	if len(s.origTargets[name]) == 0 {
+		out = ep.QueryFlat(query)
 
-	for _, row := range out.content {
-		if _, ok := s.targets[name][row[0].RawValue()]; !ok {
-			s.targets[name][row[0].RawValue()] = Empty
+		for _, row := range out.content {
 			s.origTargets[name] = append(s.origTargets[name], row[0])
-
 		}
 	}
-	// fmt.Println("Orig Targets of shape ", name, " len: ", len(s.o))
 }
 
 // InvalidTargets compares the targets of a node shape against the decorated graph and

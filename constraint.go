@@ -1048,11 +1048,12 @@ type TargetExpression interface {
 }
 
 type TargetIndirect struct {
-	terms []string // the list of terms
+	reference string          // to know with attribute to project
+	query     SparqlQueryFlat // expressing indirect dependencies as a Sparql Query
 }
 
 func (t TargetIndirect) String() string {
-	return fmt.Sprint(t.terms)
+	return fmt.Sprint("An indirect target dependency (form of a query).")
 }
 
 type TargetClass struct {

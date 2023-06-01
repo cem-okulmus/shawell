@@ -241,7 +241,10 @@ func main() {
 	} else {
 		res, invalidTargets := parsedDoc.Validate(endpoint)
 
+		fmt.Println("----------------------------------")
+		fmt.Println("RESULT: --------------------------")
 		fmt.Println("Shacl Document valid: ", res)
+		fmt.Println("----------------------------------")
 
 		for k, v := range invalidTargets {
 			fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(100))

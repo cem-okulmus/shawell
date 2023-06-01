@@ -11,7 +11,8 @@ import (
 type Shape interface {
 	IsShape()
 	String() string
-	ToSparql(target SparqlQuery) SparqlQuery
+	ToSparql(target SparqlQueryFlat) SparqlQuery
+	ToSparqlFlat(target SparqlQueryFlat) SparqlQueryFlat
 	GetIRI() string
 	GetDeps() []dependency
 	IsActive() bool

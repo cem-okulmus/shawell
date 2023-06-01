@@ -8,7 +8,7 @@ sh:CarShape
 	a sh:NodeShape ;
 	sh:targetClass dbr:Vehicle ;
 	sh:property [			
-		sh:path dbo:part2 ;
+		sh:path dbo:part;
 		sh:maxCount 3;
 	] ;
 	sh:deactivated false .

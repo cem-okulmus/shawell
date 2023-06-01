@@ -19,4 +19,4 @@ sh:WheelShape
 		sh:hasValue dbr:Circle ; 
 	] ;
 	sh:closed true ;	
-	sh:deactivated true .
+	sh:deactivated false .
