@@ -1006,6 +1006,53 @@ outer:
 	return out
 }
 
+// InvalidTargets compares the targets of a node shape against the decorated graph and
+// returns those targets that do not have this shape
+func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table) Table {
+	var out Table
+
+	var nodesWithShape Table
+
+	// nodesWithShape , found :=
+
+	for i := range LPTables {
+		if len(LPTables[i].header) != 1 {
+			log.Panicln("Logic Table with more than one result returned, somehow!")
+		}
+
+		header := LPTables[i].header[0]
+		if strings.ToLower(header) == strings.ToLower(shape) {
+			nodesWithShape = LPTables[i]
+			break
+		}
+	}
+
+	// fmt.Println("Answers: ", len(nodesWithShape.content))
+
+	// targets := s.GetTargets(shape, ep)
+	// if !hasTargets {
+	// 	return out, false
+	// }
+
+	out.header = append(out.header, "Not "+shape[len(_sh):])
+
+outer:
+	for _, t := range s.origTargets[shape] {
+		tString := removeAbbr(t.RawValue())
+		for _, n := range nodesWithShape.content {
+			nString := removeAbbr(n[0].RawValue())
+
+			if nString == tString {
+				// fmt.Println("Found ", term, " in the answer")
+				continue outer
+			}
+		}
+		out.content = append(out.content, []rdf.Term{t})
+	}
+
+	return out
+}
+
 // InvalidTargetsWithExplanation returns the targets that do not match the shape they are supposed
 // to, but in addition to that, also returns an explanation in the form of a witness table.
 // func (s *ShaclDocument) InvalidTargetsWithExplanation(shape string, ep endpoint) (Table, []string) {
@@ -1057,6 +1104,32 @@ func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table) {
 		if s.nodeShapes[i].IsActive() { // deactivated shapes do not factor the validation
 			iri := s.nodeShapes[i].GetIRI()
 			invalidTargets := s.InvalidTargets(iri, ep)
+			if len(invalidTargets.content) > 0 {
+				out[iri] = invalidTargets
+				// outExp[iri] = abbrAll(explanations)
+				result = false
+			}
+		}
+	}
+
+	s.validated = true
+
+	return result, out
+}
+
+// Validate checks for each of the node shapes of a SHACL document, whether their target nodes
+// occur in the decorated graph with the shapes they are supposed to. If not, it returns false
+// as well as list of tables for each node shape of the nodes that fail validation.
+func (s *ShaclDocument) ValidateLP(LPTables []Table) (bool, map[string]Table) {
+	var out map[string]Table = make(map[string]Table)
+	// var outExp map[string][]string = make(map[string][]string)
+	var result bool = true
+
+	// Produce InvalidTargets for each node shape
+	for i := range s.nodeShapes {
+		if s.nodeShapes[i].IsActive() { // deactivated shapes do not factor the validation
+			iri := s.nodeShapes[i].GetIRI()
+			invalidTargets := s.InvalidTargetLP(iri, LPTables)
 			if len(invalidTargets.content) > 0 {
 				out[iri] = invalidTargets
 				// outExp[iri] = abbrAll(explanations)

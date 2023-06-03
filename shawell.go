@@ -222,32 +222,38 @@ func main() {
 
 	parsedDoc.AllCondAnswers(endpoint)
 
-	// for k,v := range parsedDoc.condAnswers {
+	// for k, v := range parsedDoc.condAnswers {
 	// 	fmt.Println("TABLE: ", k)
-	// 	fmt.Println(v)
+	// 	fmt.Println(v.Limit(5))
 	// }
 
 	lp := parsedDoc.GetAllLPs()
 	// fmt.Println("Get LP for document: ", lp)
 
+	var res bool
+	var invalidTargets map[string]Table
+
 	if parsedDoc.IsRecursive() {
 		fmt.Println("Recursive document parsed, tranforming to LP and sending off to DLV.")
 
 		lpTables := lp.Answer()
-		fmt.Println("Answer from DLV: ")
-		for i := range lpTables {
-			fmt.Println(lpTables[i].Limit(5))
-		}
+
+		// fmt.Println("Answer from DLV: ")
+		// for i := range lpTables {
+		// 	fmt.Println(lpTables[i].Limit(5))
+		// }
+		res, invalidTargets = parsedDoc.ValidateLP(lpTables)
+
 	} else {
-		res, invalidTargets := parsedDoc.Validate(endpoint)
+		res, invalidTargets = parsedDoc.Validate(endpoint)
+	}
 
-		fmt.Println("----------------------------------")
-		fmt.Println("RESULT: --------------------------")
-		fmt.Println("Shacl Document valid: ", res)
-		fmt.Println("----------------------------------")
+	fmt.Println("----------------------------------")
+	fmt.Println("RESULT: --------------------------")
+	fmt.Println("Shacl Document valid: ", res)
+	fmt.Println("----------------------------------")
 
-		for k, v := range invalidTargets {
-			fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(100))
-		}
+	for k, v := range invalidTargets {
+		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(100))
 	}
 }

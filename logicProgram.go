@@ -99,7 +99,7 @@ func (p program) Answer() []Table {
 
 	cmd.Stdin = strings.NewReader(outLP)
 
-	fmt.Println("----\n\n,", outLP, "\n\n-------")
+	// fmt.Println("----\n\n,", outLP, "\n\n-------")
 
 	out, _ := cmd.Output()
 	// check(err)
