@@ -32,15 +32,16 @@ type dependency struct {
 var Empty struct{}
 
 type ShaclDocument struct {
-	nodeShapes     []Shape
-	shapeNames     map[string]*Shape           // used to unwind references to shapes
-	condAnswers    map[string]Table            // for each NodeShape, its (un)conditional answer
-	uncondAnswers  map[string]Table            // caches the results from unwinding
-	origTargets    map[string][]rdf.Term       // cache the original result for cache
-	targets        map[string]*SparqlQueryFlat // caches for targets
-	indirectTarget map[string]bool             // stores for each shape the indirect Targets, due to deps
-	answered       bool
-	validated      bool
+	nodeShapes    []Shape
+	shapeNames    map[string]*Shape // used to unwind references to shapes
+	condAnswers   map[string]Table  // for each NodeShape, its (un)conditional answer
+	uncondAnswers map[string]Table  // caches the results from unwinding
+	targets       map[string]Table  // the materialised targets of a given shape
+	// cacheTargets   map[string][]rdf.Term // cache the original result for cache
+	// indirectTarget map[string][]string   // stores for each shape the dependant shapes
+	answered     bool
+	materialised bool
+	validated    bool
 }
 
 func (s ShaclDocument) String() string {
@@ -101,9 +102,10 @@ func GetShaclDocument(rdfGraph *rdf.Graph) (out ShaclDocument) {
 	out.shapeNames = make(map[string]*Shape)
 	out.condAnswers = make(map[string]Table)
 	out.uncondAnswers = make(map[string]Table)
-	out.origTargets = make(map[string][]rdf.Term)
-	out.indirectTarget = make(map[string]bool)
-	out.targets = make(map[string]*SparqlQueryFlat)
+	out.targets = make(map[string]Table)
+	// out.origTargets = make(map[string][]rdf.Term)
+	// out.indirectTarget = make(map[string]bool)
+	// out.targets = make(map[string]*[]SparqlQueryFlat)
 
 	NodeShapeTriples := rdfGraph.All(nil, ResA, res(_sh+"NodeShape"))
 	// fmt.Println(res(sh+"NodeShape"), " of node shapes, ", NodeShapeTriples)
@@ -118,7 +120,7 @@ func GetShaclDocument(rdfGraph *rdf.Graph) (out ShaclDocument) {
 		}
 
 		var shape Shape
-		shape = out.GetNodeShape(rdfGraph, t.Subject)
+		shape, _ = out.GetNodeShape(rdfGraph, t.Subject, 0)
 		out.nodeShapes = append(out.nodeShapes, shape)
 
 		// if _, ok := out.shapeNames[name]; ok {
@@ -141,7 +143,7 @@ func GetShaclDocument(rdfGraph *rdf.Graph) (out ShaclDocument) {
 		}
 
 		var shape Shape
-		shape = out.GetPropertyShape(rdfGraph, t.Subject)
+		shape, _ = out.GetPropertyShape(rdfGraph, t.Subject, 0)
 		// if !ok {
 		// 	detected = false
 		// 	// fmt.Println("Failed during triple", t)
@@ -277,12 +279,17 @@ func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool
 
 // ToSparql transforms a SHACL document into a series of Sparql queries
 // one for each node  shape
-func (s ShaclDocument) ToSparql() (out []SparqlQuery) {
+func (s ShaclDocument) ToSparql() (out [][]SparqlQuery) {
 	for i := range s.nodeShapes {
 
 		target, _ := s.GetTargetShape(s.nodeShapes[i].GetIRI())
 
-		out = append(out, s.nodeShapes[i].ToSparql(target))
+		var shapeQueries []SparqlQuery
+		for i := range target {
+			shapeQueries = append(shapeQueries, s.nodeShapes[i].ToSparql(target[i]))
+		}
+
+		out = append(out, shapeQueries)
 	}
 
 	return out
@@ -298,150 +305,164 @@ func remove(s [][]rdf.Term, i int) [][]rdf.Term {
 // }
 
 func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
-	foundNewIndirect := true
+	fmt.Println("Started AllCondAnswers")
 
-	for foundNewIndirect { // to ensure at least one iteration of this process
-		foundNewIndirect = false // can only enter a second iteration if new indirect targets found
-
-	outer:
-		for k, v := range s.shapeNames {
-
-			// fmt.Println("Current shape ", k)
-
-			if !(*v).IsActive() {
-				continue
-			}
-
-			// TODO: currently asking target query twice, optimise this to only send one
-			_, ok := s.targets[k]
-			if !ok {
-				// compute targets before computing the query, if not already done
-				s.GetTargets(k, ep)
-			} else {
-				m, ok := s.indirectTarget[k]
-
-				if !ok || !m {
-					continue outer // don't query if no new indirect targets
-				}
-
-			}
-
-			// if m, ok := s.indirectTarget[k]; ok && m {
-
-			// 	// fmt.Println("Writing into target of shape", k)
-
-			// 	if s.targets[k] == nil {
-			// 		// fmt.Println("Writing into shape ", k, " value ")
-			// 		s.targets[k] = m
-			// 	} else {
-			// 		newQuery := s.targets[k].Merge(*m)
-			// 		// fmt.Println("Writing into shape ", k)
-			// 		s.targets[k] = &newQuery
-			// 	}
-
-			s.indirectTarget[k] = false
-			// }
-
-			target, _ := s.GetTargetShape(k)
-			out := ep.Answer(v, target)
-
-			// fmt.Println(k, "  for dep ", v.name, " we got the uncond answers ", out.LimitString(5))
-
-			if _, ok := s.condAnswers[k]; !ok {
-				s.condAnswers[k] = out
-			} else {
-				tmpTable := s.condAnswers[k]
-
-				tmpTable.content = append(tmpTable.content, out.content...)
-				s.condAnswers[k] = tmpTable
-			}
-
-		}
-
-		for k, v := range s.shapeNames {
-			// extract indirect Targets
-			out := s.condAnswers[k]
-
-			deps := (*v).GetDeps()
-			for i := range deps {
-				// if !deps[i].external {
-				// 	fmt.Println("Dep ", deps[i].name, " for shape ", k, " is internal. skip")
-				// 	continue // no need to add targets for internal dependency
-				// }
-
-				for _, ref := range deps[i].name {
-
-					// fmt.Println("Checking dep on ", ref.name, " for shape ", k)
-
-					foundSomething := false
-
-					foundSomething, attr, external := s.GetIndirectTargets(ref, deps[i], out)
-
-					// fmt.Println("Found ", len(indirectTargets), " targets")
-					// fmt.Println("Found some indirect targets: ", foundSomething)
-
-					// for i := range indirectTargets {
-					// 	indirectString := indirectTargets[i].RawValue()
-					// 	if _, ok := s.targets[ref.name][indirectString]; !ok {
-
-					// 		foundNewIndirect = true
-
-					// 		if _, ok := s.indirectTarget[ref.name]; !ok {
-					// 			s.indirectTarget[ref.name] = make(map[string]struct{})
-					// 		}
-					// 		s.indirectTarget[ref.name][indirectString] = Empty
-					// 	}
-					// }
-
-					if foundSomething {
-
-						newQuery := out.query.ProjectToVar(fmt.Sprint("InnerObj", attr), external)
-
-						m, ok := s.targets[ref.name]
-
-						if !ok || m == nil { // no targets, thus any indirect targets may be added
-							// fmt.Println("initial indirect for shape", ref.name, m == nil)
-
-							s.targets[ref.name] = MergeGeneral(s.targets[ref.name], &newQuery)
-							s.indirectTarget[ref.name] = true
-
-							// fmt.Println(s.indirectTarget[ref.name])
-							foundNewIndirect = true
-
-							// fmt.Println("-----------------------------")
-							// fmt.Println("Found new indirectTargets for shape ", ref.name)
-							// fmt.Println("-----------------------------")
-						}
-
-						if ok && m != nil {
-
-							// if s.targets[ref.name] == nil { // no old targets
-
-							// 	s.indirectTarget[ref.name] = MergeGeneral(s.indirectTarget[ref.name], &newQuery)
-							// 	foundNewIndirect = true
-							// } else {
-							subsumed := s.targets[ref.name].Contained(newQuery, ep)
-
-							if !subsumed {
-								foundNewIndirect = true
-								s.targets[ref.name] = MergeGeneral(s.targets[ref.name], &newQuery)
-								s.indirectTarget[ref.name] = true
-							}
-
-						}
-					}
-
-					// if foundNewIndirect {
-
-					// 	fmt.Println("-----------------------------")
-					// 	fmt.Println("Found new indirectTargets for shape ", ref.name)
-					// 	fmt.Println("-----------------------------")
-					// }
-
-				}
-			}
-		}
+	// don't repeat this for the same document
+	if s.answered {
+		return
 	}
+
+	// foundNewIndirect := true
+
+	// for foundNewIndirect { // to ensure at least one iteration of this process
+	// 	foundNewIndirect = false // can only enter a second iteration if new indirect targets found
+
+	for k, v := range s.shapeNames {
+
+		// fmt.Println("Current shape ", k)
+
+		if !(*v).IsActive() {
+			continue
+		}
+
+		// if no targets defined for a shape, then skip it (nothing to query, nothing to check)
+		if len((*v).GetTargets()) == 0 {
+			continue
+		}
+
+		// // TODO: currently asking target query twice, optimise this to only send one
+		// _, ok := s.targets[k]
+		// if !ok {
+		// 	// compute targets before computing the query, if not already done
+		// 	s.GetTargets(k, ep)
+		// } else {
+		// 	// m, ok := s.indirectTarget[k]
+		// 	// skip shape if it has no target set
+		// 	continue
+
+		// 	// if !ok || !m {
+		// 	// continue outer // don't query if no new indirect targets
+		// 	// }
+		// }
+
+		// if m, ok := s.indirectTarget[k]; ok && m {
+
+		// 	// fmt.Println("Writing into target of shape", k)
+
+		// 	if s.targets[k] == nil {
+		// 		// fmt.Println("Writing into shape ", k, " value ")
+		// 		s.targets[k] = m
+		// 	} else {
+		// 		newQuery := s.targets[k].Merge(*m)
+		// 		// fmt.Println("Writing into shape ", k)
+		// 		s.targets[k] = &newQuery
+		// 	}
+		// s.indirectTarget[k] = false
+		// }
+
+		targetQueries, _ := s.GetTargetShape(k)
+
+		out := ep.Answer(v, targetQueries)
+
+		// fmt.Println(k, "  for dep ", v.name, " we got the uncond answers ", out.LimitString(5))
+
+		// if _, ok := s.condAnswers[k]; !ok {
+		s.condAnswers[k] = out
+		// } else {
+		// 	tmpTable := s.condAnswers[k]
+
+		// 	tmpTable.content = append(tmpTable.content, out.content...)
+		// 	s.condAnswers[k] = tmpTable
+		// }
+
+	}
+
+	// for k, v := range s.shapeNames {
+	// 	// extract indirect Targets
+	// 	out := s.condAnswers[k]
+
+	// 	deps := (*v).GetDeps()
+	// 	for i := range deps {
+	// 		// if !deps[i].external {
+	// 		// 	fmt.Println("Dep ", deps[i].name, " for shape ", k, " is internal. skip")
+	// 		// 	continue // no need to add targets for internal dependency
+	// 		// }
+
+	// 		for _, ref := range deps[i].name {
+
+	// 			// fmt.Println("Checking dep on ", ref.name, " for shape ", k)
+
+	// 			foundSomething := false
+
+	// 			foundSomething, attr, external := s.GetIndirectTargets(ref, deps[i], out)
+
+	// 			// fmt.Println("Found ", len(indirectTargets), " targets")
+	// 			// fmt.Println("Found some indirect targets: ", foundSomething)
+
+	// 			// for i := range indirectTargets {
+	// 			// 	indirectString := indirectTargets[i].RawValue()
+	// 			// 	if _, ok := s.targets[ref.name][indirectString]; !ok {
+
+	// 			// 		foundNewIndirect = true
+
+	// 			// 		if _, ok := s.indirectTarget[ref.name]; !ok {
+	// 			// 			s.indirectTarget[ref.name] = make(map[string]struct{})
+	// 			// 		}
+	// 			// 		s.indirectTarget[ref.name][indirectString] = Empty
+	// 			// 	}
+	// 			// }
+
+	// 			if foundSomething {
+
+	// 				newQuery := out.query.ProjectToVar(fmt.Sprint("InnerObj", attr), external)
+
+	// 				m, ok := s.targets[ref.name]
+
+	// 				if !ok || m == nil { // no targets, thus any indirect targets may be added
+	// 					// fmt.Println("initial indirect for shape", ref.name, m == nil)
+
+	// 					// s.targets[ref.name] = MergeGeneral(s.targets[ref.name], &newQuery)
+
+	// 					*s.targets[ref.name] = append(*s.targets[ref.name], newQuery)
+
+	// 					s.indirectTarget[ref.name] = true
+
+	// 					// fmt.Println(s.indirectTarget[ref.name])
+	// 					foundNewIndirect = true
+
+	// 					// fmt.Println("-----------------------------")
+	// 					// fmt.Println("Found new indirectTargets for shape ", ref.name)
+	// 					// fmt.Println("-----------------------------")
+	// 				}
+
+	// 				if ok && m != nil {
+
+	// 					// if s.targets[ref.name] == nil { // no old targets
+
+	// 					// 	s.indirectTarget[ref.name] = MergeGeneral(s.indirectTarget[ref.name], &newQuery)
+	// 					// 	foundNewIndirect = true
+	// 					// } else {
+	// 					subsumed := s.targets[ref.name].Contained(newQuery, ep)
+
+	// 					if !subsumed {
+	// 						foundNewIndirect = true
+	// 						s.targets[ref.name] = MergeGeneral(s.targets[ref.name], &newQuery)
+	// 						s.indirectTarget[ref.name] = true
+	// 					}
+
+	// 				}
+	// 			}
+
+	// 			// if foundNewIndirect {
+
+	// 			// 	fmt.Println("-----------------------------")
+	// 			// 	fmt.Println("Found new indirectTargets for shape ", ref.name)
+	// 			// 	fmt.Println("-----------------------------")
+	// 			// }
+
+	// 		}
+	// 	}
+	// }
 
 	s.answered = true
 }
@@ -809,167 +830,112 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table {
 // 	return abbr(fmt.Sprint("For ", node, ": ", strings.Join(answers, ", and "), ".")), unmet
 // }
 
-func (s *ShaclDocument) GetTargetTerm(t TargetExpression) string {
-	var queryBody string
-	switch t.(type) {
-	case TargetClass:
-		t := t.(TargetClass)
-
-		queryBody = "?sub <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>/<http://www.w3.org/2000/01/rdf-schema#subClassOf>* NODE ."
-
-		queryBody = strings.ReplaceAll(queryBody, "NODE", t.class.String())
-
-	case TargetNode:
-		t := t.(TargetNode)
-
-		queryBody = " BIND (NODE AS ?this)"
-
-		queryBody = strings.ReplaceAll(queryBody, "NODE", t.node.String())
-
-	case TargetSubjectOf:
-		t := t.(TargetSubjectOf)
-
-		queryBody = "  ?sub NODE ?obj ."
-
-		queryBody = strings.ReplaceAll(queryBody, "NODE", t.path.String())
-
-	case TargetObjectsOf:
-		t := t.(TargetObjectsOf)
-
-		queryBody = " ?obj NODE ?sub ."
-
-		queryBody = strings.ReplaceAll(queryBody, "NODE", t.path.String())
-	case TargetIndirect:
-		t := t.(TargetIndirect)
-
-		if len(t.query.body) != 1 {
-			log.Panicln("Target query with more than one body!")
-		}
-
-		// variable, ok := t.query.refToVar[t.reference]
-		// if !ok {
-		// 	log.Panicln("No mapping to variable for needed reference ", t.reference)
-		// }
-		// t.query.head = []string{fmt.Sprint("( ", variable, " AS ?sub )")}
-
-		queryBody = t.query.StringPrefix(false)
-
-		// queryBody = strings.Join(t.query.body, "\n")
-
-	}
-
-	return queryBody
-}
-
 // GetTargetShape produces the subquery needed to reduce the focus nodes to those described
 // in the target expressions, understood as the union overall target expressions.
-func (s *ShaclDocument) GetTargetShape(name string) (out SparqlQueryFlat, empty bool) {
-	var targets []TargetExpression
-
+func (s *ShaclDocument) GetTargetShape(name string) (out []SparqlQueryFlat, empty bool) {
 	ns, ok := s.shapeNames[name]
 	if !ok {
 		log.Panic(name, " is not a defined node  shape")
 	}
 
-	switch (*ns).(type) {
-	case NodeShape:
-		targets = (*ns).(NodeShape).target
-	case PropertyShape:
-		targets = (*ns).(PropertyShape).shape.target
+	targets := (*ns).GetTargets()
+
+	if len(targets) == 0 {
+		return out, true
 	}
 
-	empty = len(targets) == 0
-
 	// handle implicit class targets
-
 	if !(*ns).IsBlank() {
 		targets = append(targets, TargetClass{class: res((*ns).GetIRI())})
 	}
 
 	// handle indirect targets:
 
-	if v, ok := s.targets[name]; ok && v != nil {
-		// keys := maps.Keys(v)
+	// if v, ok := s.targets[name]; ok && v != nil {
+	// 	// keys := maps.Keys(v)
 
-		// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-		// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-		// fmt.Println("Shape ", name)
+	// 	// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+	// 	// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+	// 	// fmt.Println("Shape ", name)
 
-		// fmt.Println("Query inside TargetIndirect: ", v.String())
-		// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-		// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+	// 	// fmt.Println("Query inside TargetIndirect: ", v.String())
+	// 	// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+	// 	// fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
 
-		targets = append(targets, TargetIndirect{query: *v, reference: name})
+	// 	targets = append(targets, TargetIndirect{query: *v, reference: name})
+	// }
+
+	// out.head = "?sub"
+
+	// var body string
+
+	var queries []string
+
+	for i := range targets {
+		term := GetTargetTerm(targets[i])
+
+		// _, ok := targets[i].(TargetIndirect)
+
+		// if !ok { // don't mess with the query in case of indirect targets
+		term = strings.ReplaceAll(term, "(", "\\(")
+		term = strings.ReplaceAll(term, ")", "\\)")
+		term = strings.ReplaceAll(term, "'", "\\'")
+		term = strings.ReplaceAll(term, "&", "\\&")
+		term = strings.ReplaceAll(term, ",", "\\,")
+		// }
+
+		// term = strings.ReplaceAll(term, "&", "\\&")
+		queries = append(queries, term)
 	}
 
-	out.head = "?sub"
+	// doing a more complex UNION to improve compatbility with DBPedia Sparql endpoint
 
-	var body string
+	// var temps []string
 
-	if len(targets) > 0 {
-		var queries []string
-
-		for i := range targets {
-			term := s.GetTargetTerm(targets[i])
-
-			_, ok := targets[i].(TargetIndirect)
-
-			if !ok { // don't mess with the query in case of indirect targets
-				term = strings.ReplaceAll(term, "(", "\\(")
-				term = strings.ReplaceAll(term, ")", "\\)")
-				term = strings.ReplaceAll(term, "'", "\\'")
-				term = strings.ReplaceAll(term, "Jr.", "Jr\\.")
-				term = strings.ReplaceAll(term, "&", "\\&")
-				term = strings.ReplaceAll(term, ",", "\\,")
-			}
-
-			// term = strings.ReplaceAll(term, "&", "\\&")
-			queries = append(queries, term)
-		}
-
-		// doing a more complex UNION to improve compatbility with DBPedia Sparql endpoint
-
-		var temps []string
-
-		for i := range queries {
-			temps = append(temps, fmt.Sprint("{SELECT ?sub {\n\t", queries[i], "\n}}"))
-		}
-
-		body = fmt.Sprint("\n", strings.Join(temps, "\nUNION\n"), "\n")
-
+	for i := range queries {
+		// temps = append(temps, fmt.Sprint("{SELECT ?sub {\n\t", queries[i], "\n}}"))
+		out = append(out, SparqlQueryFlat{
+			head: "?sub",
+			body: []string{queries[i]},
+		})
 	}
 
-	out.body = append(out.body, body)
+	// body = fmt.Sprint("\n", strings.Join(temps, "\nUNION\n"), "\n")
 
-	return out, empty
+	// out.body = append(out.body, body)
+
+	return out, false
 }
 
-func (s *ShaclDocument) GetTargets(name string, ep endpoint) {
-	var out Table
+func (s *ShaclDocument) MaterialiseTargets(ep endpoint) {
+	if s.materialised { // don't repeat this for same document
+		return
+	}
+
 	// // check if result is already cached
 	// if _, ok := s.targets[name]; ok {
 	// 	return
 	// }
 
-	query, empty := s.GetTargetShape(name)
-	if empty {
-		// fmt.Println("Setting nil to target sof shape ", name)
-		s.targets[name] = nil
-		return
-	}
-	// fmt.Println("|||||||||||||||||||||||||||||||")
-	// fmt.Println("Shape ", name, " has non-empty targets")
-	// fmt.Println("|||||||||||||||||||||||||||||||")
+	for name := range s.shapeNames {
+		var out Table
 
-	s.targets[name] = &query
-
-	if len(s.origTargets[name]) == 0 {
-		out = ep.QueryFlat(query)
-
-		for _, row := range out.content {
-			s.origTargets[name] = append(s.origTargets[name], row[0])
+		targetQueries, empty := s.GetTargetShape(name)
+		if empty {
+			// fmt.Println("Setting nil to target sof shape ", name)
+			s.targets[name] = out
+			return
 		}
+
+		for i := range targetQueries {
+			tmp := ep.QueryFlat(targetQueries[i])
+
+			out.content = append(out.content, tmp.content...)
+		}
+
+		s.targets[name] = out
 	}
+	s.materialised = true
 }
 
 // InvalidTargets compares the targets of a node shape against the decorated graph and
@@ -981,7 +947,14 @@ func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) Table {
 		s.AllCondAnswers(ep)
 	}
 
+	if !s.materialised {
+		s.MaterialiseTargets(ep)
+	}
+
 	nodesWithShape := s.UnwindAnswer(shape)
+	// fmt.Println("All nodes with shape: ", shape)
+	// fmt.Println(nodesWithShape)
+
 	// fmt.Println("Answers: ", len(nodesWithShape.content))
 
 	// targets := s.GetTargets(shape, ep)
@@ -991,25 +964,36 @@ func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) Table {
 
 	out.header = append(out.header, "Not "+shape[len(_sh):])
 
-outer:
-	for _, t := range s.origTargets[shape] {
+	targets := s.targets[shape]
+	// fmt.Println("Targets of shape: ", shape)
+	// fmt.Println(targets)
 
+	n := len(targets.content)
+
+outer:
+	for _, t := range targets.content[:n] {
 		for _, n := range nodesWithShape.content {
-			if n[0].Equal(t) {
-				// fmt.Println("Found ", term, " in the answer")
+			if n[0].Equal(t[0]) {
 				continue outer
 			}
 		}
-		out.content = append(out.content, []rdf.Term{t})
+		out.content = append(out.content, t)
 	}
+
+	// fmt.Println("My invalid targets for: ", shape)
+	// fmt.Println(out)
 
 	return out
 }
 
 // InvalidTargets compares the targets of a node shape against the decorated graph and
 // returns those targets that do not have this shape
-func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table) Table {
+func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table, ep endpoint) Table {
 	var out Table
+
+	if !s.materialised {
+		s.MaterialiseTargets(ep)
+	}
 
 	var nodesWithShape Table
 
@@ -1021,7 +1005,7 @@ func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table) Table {
 		}
 
 		header := LPTables[i].header[0]
-		if strings.ToLower(header) == strings.ToLower(shape) {
+		if strings.EqualFold(header, shape) {
 			nodesWithShape = LPTables[i]
 			break
 		}
@@ -1036,13 +1020,13 @@ func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table) Table {
 
 	out.header = append(out.header, "Not "+shape[len(_sh):])
 
-outer:
-	for _, t := range s.origTargets[shape] {
-		tString := removeAbbr(t.RawValue())
-		for _, n := range nodesWithShape.content {
-			nString := removeAbbr(n[0].RawValue())
+	targets := s.targets[shape]
 
-			if nString == tString {
+outer:
+	for _, t := range targets.content[0] { // will this work?
+
+		for _, n := range nodesWithShape.content {
+			if n[0].Equal(t) {
 				// fmt.Println("Found ", term, " in the answer")
 				continue outer
 			}
@@ -1120,7 +1104,7 @@ func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table) {
 // Validate checks for each of the node shapes of a SHACL document, whether their target nodes
 // occur in the decorated graph with the shapes they are supposed to. If not, it returns false
 // as well as list of tables for each node shape of the nodes that fail validation.
-func (s *ShaclDocument) ValidateLP(LPTables []Table) (bool, map[string]Table) {
+func (s *ShaclDocument) ValidateLP(LPTables []Table, ep endpoint) (bool, map[string]Table) {
 	var out map[string]Table = make(map[string]Table)
 	// var outExp map[string][]string = make(map[string][]string)
 	var result bool = true
@@ -1129,7 +1113,7 @@ func (s *ShaclDocument) ValidateLP(LPTables []Table) (bool, map[string]Table) {
 	for i := range s.nodeShapes {
 		if s.nodeShapes[i].IsActive() { // deactivated shapes do not factor the validation
 			iri := s.nodeShapes[i].GetIRI()
-			invalidTargets := s.InvalidTargetLP(iri, LPTables)
+			invalidTargets := s.InvalidTargetLP(iri, LPTables, ep)
 			if len(invalidTargets.content) > 0 {
 				out[iri] = invalidTargets
 				// outExp[iri] = abbrAll(explanations)

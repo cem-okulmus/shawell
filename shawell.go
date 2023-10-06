@@ -190,14 +190,28 @@ func main() {
 
 	// input flags
 	endpointAddress := flagSet.String("endpoint", "", "The URL to a SPARQL endpoint.")
+	endpointUpdateAddress := flagSet.String("endpointUpdate", "",
+		"The URL to a SPARQL endpoint used for updating the data.")
 	shaclDocPath := flagSet.String("shaclDoc", "", "The file path to a SHACL document.")
-	dlvLoc := flagSet.String("dlv", "bin/dlv", "The location of the DLV binary used to evaluate recursive SHACL.")
+	dlvLoc := flagSet.String("dlv", "bin/dlv",
+		"The location of the DLV binary used to evaluate recursive SHACL.")
+	dataIncluded := flagSet.Bool("dataIncluded", false,
+		"Set this to true if the SHACL document also contains the data to be checked.")
+	username := flagSet.String("user", "", "The username needed to access endpoint.")
+	password := flagSet.String("password", "", "The password needed to access endpoint.")
+	debug := flagSet.Bool("debug", false, "Activacting debugging features.")
+
+	usingUpdateEndpoint := false
 
 	flagSet.Parse(os.Args[1:])
 
 	if *endpointAddress == "" || *shaclDocPath == "" {
 		flagSet.Usage()
 		os.Exit(-1)
+	}
+
+	if *endpointUpdateAddress != "" {
+		usingUpdateEndpoint = true // using a system like GraphDB that expects different endpoints
 	}
 
 	// END Command-Line Argument Parsing
@@ -213,12 +227,26 @@ func main() {
 	err = g2.Parse(shaclDoc, "text/turtle")
 	check(err)
 
+	endpoint := GetSparqlEndpoint(
+		*endpointAddress,
+		*endpointUpdateAddress,
+		*username,
+		*password,
+		*debug,
+		usingUpdateEndpoint,
+		g2.String(),
+	)
+
 	GetNameSpace(shaclDoc)
+
+	// check if data needs to be inserted into Endpoint
+	if *dataIncluded {
+		res := endpoint.Insert(g2)
+		check(res)
+	}
 
 	var parsedDoc ShaclDocument = GetShaclDocument(g2)
 	fmt.Println("The parsed Shacl Doc", parsedDoc.String())
-
-	endpoint := GetSparqlEndpoint(*endpointAddress, "", "")
 
 	parsedDoc.AllCondAnswers(endpoint)
 
@@ -242,7 +270,7 @@ func main() {
 		// for i := range lpTables {
 		// 	fmt.Println(lpTables[i].Limit(5))
 		// }
-		res, invalidTargets = parsedDoc.ValidateLP(lpTables)
+		res, invalidTargets = parsedDoc.ValidateLP(lpTables, endpoint)
 
 	} else {
 		res, invalidTargets = parsedDoc.Validate(endpoint)

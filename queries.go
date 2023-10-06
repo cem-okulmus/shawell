@@ -44,7 +44,7 @@ func (p PropertyShape) ToSparqlFlat(target SparqlQueryFlat) (out SparqlQueryFlat
 // ToSubquery is used to embedd the property shape into a node shape by way of a subquery in the
 // body, and number of variables in the head. The head variables are only included in the
 // presence of referential constraints (and,or,xone,node,not, qualifiedValueShape)
-func (p PropertyShape) ToSubquery(num int, output bool) (head []string, body string, having []HavingClause) {
+func (p PropertyShape) ToSubquery(num int) (head []string, body string, having []HavingClause) {
 	universalOnly := true
 	// referentialConsPresent := false
 
@@ -71,7 +71,7 @@ func (p PropertyShape) ToSubquery(num int, output bool) (head []string, body str
 		// tmp := fmt.Sprint("( ", p.minCount, " <= COUNT(DISTINCT ?InnerObj", num, ") )")
 
 		tmp := HavingClause{
-			min:      false,
+			min:      true,
 			numeral:  p.minCount,
 			variable: fmt.Sprint("?InnerObj", num),
 			path:     path,
@@ -124,10 +124,11 @@ func (p PropertyShape) ToSubquery(num int, output bool) (head []string, body str
 	}
 
 	if p.maxCount != 0 {
+		// universalOnly = false
 		// tmp := fmt.Sprint("(", p.maxCount, " >= COUNT(DISTINCT ?InnerObj", num, ") )")
 
 		tmp := HavingClause{
-			min:      true,
+			min:      false,
 			numeral:  p.maxCount,
 			variable: fmt.Sprint("?InnerObj", num),
 			path:     path,
@@ -146,20 +147,20 @@ func (p PropertyShape) ToSubquery(num int, output bool) (head []string, body str
 
 	// most important thing: The path expression
 
-	if output && universalOnly {
-		if universalOnly {
-			sb.WriteString("OPTIONAL { \n")
-		}
-		sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
-
-		if universalOnly {
-			sb.WriteString("} \n")
-		}
-	} else {
-		if !universalOnly {
-			sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
-		}
+	// if output && universalOnly {
+	if universalOnly {
+		sb.WriteString("OPTIONAL { \n")
 	}
+	sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
+
+	if universalOnly {
+		sb.WriteString("} \n")
+	}
+	// } else {
+	// 	if !universalOnly {
+	// 		sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
+	// 	}
+	// }
 
 	// inner body parts
 	for i := range bodyParts {
@@ -396,7 +397,8 @@ func (n NodeShape) ToSparql(target SparqlQueryFlat) (out SparqlQuery) {
 	// leaving out property pair constraints; cannot appear inside node shape
 
 	for i, p := range n.properties {
-		headP, bodyP, havingP := p.ToSubquery(i, len(p.shape.deps) > 0)
+		// headP, bodyP, havingP := p.ToSubquery(i, len(p.shape.deps) > 0)
+		headP, bodyP, havingP := p.ToSubquery(i)
 
 		head = append(head, headP...)
 		body = append(body, bodyP)

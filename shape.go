@@ -15,6 +15,7 @@ type Shape interface {
 	ToSparqlFlat(target SparqlQueryFlat) SparqlQueryFlat
 	GetIRI() string
 	GetDeps() []dependency
+	GetTargets() []TargetExpression
 	IsActive() bool
 	IsBlank() bool
 }
@@ -44,6 +45,8 @@ type NodeShape struct {
 	deps            []dependency
 }
 
+func (n NodeShape) GetTargets() []TargetExpression { return n.target }
+
 func (n NodeShape) IsActive() bool { return !n.deactivated }
 
 func (n NodeShape) IsBlank() bool {
@@ -70,8 +73,10 @@ func (n NodeShape) StringTab(a int) string {
 
 	switch n.IRI.(type) {
 	case *rdf2go.BlankNode:
-		sb.WriteString(bold.Sprint(n.IRI))
-		sb.WriteString("(blank)")
+		if a == 0 {
+			sb.WriteString(bold.Sprint(n.IRI))
+			sb.WriteString("(blank)")
+		}
 	default:
 		sb.WriteString(bold.Sprint(n.IRI))
 	}
@@ -154,7 +159,7 @@ func (n NodeShape) StringTab(a int) string {
 	}
 
 	for i := range n.properties {
-		sb.WriteString(fmt.Sprint(_sh, "path "))
+		sb.WriteString(fmt.Sprint(_sh, "property "))
 		sb.WriteString(n.properties[i].StringTab(a + 1))
 		sb.WriteString(tab)
 	}
@@ -208,6 +213,8 @@ type PropertyShape struct {
 	shape    NodeShape    // underlying struct, used in both types of Shape
 }
 
+func (p PropertyShape) GetTargets() []TargetExpression { return p.shape.GetTargets() }
+
 func (p PropertyShape) IsActive() bool { return p.shape.IsActive() }
 
 func (p PropertyShape) GetDeps() []dependency { return p.shape.deps }
@@ -223,22 +230,25 @@ func (p PropertyShape) StringTab(a int) string {
 	var sb strings.Builder
 
 	bold := color.New(color.Bold)
-
-	if p.name != "" {
-		sb.WriteString(bold.Sprint("<", p.name, ">"))
-	} else {
-		sb.WriteString(bold.Sprint("<Property> "))
-		sb.WriteString(p.shape.IRI.String())
+	if !p.IsBlank() {
+		if p.name != "" {
+			sb.WriteString(bold.Sprint("<", p.name, ">"))
+		} else {
+			sb.WriteString(bold.Sprint("Property "))
+			sb.WriteString(p.shape.IRI.String())
+		}
 	}
 	sb.WriteString(tab)
-
-	sb.WriteString("on path " + p.path.PropertyString())
+	sb.WriteString(_sh + "path " + p.path.PropertyString())
 	if p.minCount != 0 {
 		sb.WriteString(fmt.Sprint(" [ min: ", p.minCount))
+
 		if p.maxCount != 0 {
 			sb.WriteString(fmt.Sprint("  max: ", p.maxCount))
 		}
-		sb.WriteString(fmt.Sprint(" ]"))
+		sb.WriteString(" ]")
+	} else if p.maxCount != 0 {
+		sb.WriteString(fmt.Sprint(" [ min: 0  max: ", p.maxCount, " ]"))
 	}
 
 	// sb.WriteString("Rest of PropShape:")

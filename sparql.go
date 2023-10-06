@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"strings"
 )
 
@@ -36,9 +35,9 @@ type HavingClause struct {
 func (h HavingClause) String() string {
 	var order string
 	if h.min {
-		order = ">="
-	} else {
 		order = "<="
+	} else {
+		order = ">="
 	}
 
 	return fmt.Sprint("(", h.numeral, " ", order, " COUNT(DISTINCT ", h.variable, ") )")
@@ -100,7 +99,7 @@ func (s SparqlQueryFlat) ProjectToVar(variable string, external bool) (out Sparq
 		newBody = strings.ReplaceAll(newBody, "?sub", "?OldSub")
 		head = fmt.Sprint("( ?", variable, " as ?sub)")
 	} else {
-		head = fmt.Sprint("?sub")
+		head = "?sub"
 	}
 
 	out.head = head
@@ -109,35 +108,35 @@ func (s SparqlQueryFlat) ProjectToVar(variable string, external bool) (out Sparq
 	return out
 }
 
-func MergeGeneral(this, other *SparqlQueryFlat) (out *SparqlQueryFlat) {
-	if this == nil {
-		if other == nil {
-			log.Panicln("Cannot merge two nil queries")
-		}
-		return other
-	} else {
-		if other == nil {
-			return this
-		}
-	}
-	tmp := this.Merge(*other)
-	return &tmp
-}
+// func MergeGeneral(this, other *SparqlQueryFlat) (out *SparqlQueryFlat) {
+// 	if this == nil {
+// 		if other == nil {
+// 			log.Panicln("Cannot merge two nil queries")
+// 		}
+// 		return other
+// 	} else {
+// 		if other == nil {
+// 			return this
+// 		}
+// 	}
+// 	tmp := this.Merge(*other)
+// 	return &tmp
+// }
 
-// Merge assumes that the two queries share the same head and only one body element
-func (s SparqlQueryFlat) Merge(other SparqlQueryFlat) (out SparqlQueryFlat) {
-	if len(s.body) != 1 || len(other.body) != 1 {
-		log.Panicln("Target query with more than one body!")
-	}
+// // Merge assumes that the two queries share the same head and only one body element
+// func (s SparqlQueryFlat) Merge(other SparqlQueryFlat) (out SparqlQueryFlat) {
+// 	if len(s.body) != 1 || len(other.body) != 1 {
+// 		log.Panicln("Target query with more than one body!")
+// 	}
 
-	tmp := other.StringPrefix(false)
-	combinedBody := "{\n" + s.body[0] + "\n}\nUNION\n{\n" + tmp + "\n}\n"
+// 	tmp := other.StringPrefix(false)
+// 	combinedBody := "{\n" + s.body[0] + "\n}\nUNION\n{\n" + tmp + "\n}\n"
 
-	out.head = s.head
-	out.body = []string{combinedBody}
+// 	out.head = s.head
+// 	out.body = []string{combinedBody}
 
-	return out
-}
+// 	return out
+// }
 
 // Assumes both s and other to be monadic target queries; returns yes if other is contained in s
 func (s SparqlQueryFlat) Contained(other SparqlQueryFlat, ep endpoint) bool {

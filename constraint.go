@@ -19,9 +19,9 @@ func (s *ShaclDocument) GetShape(graph *rdf2go.Graph, term rdf2go.Term) (shape S
 	}
 
 	if IsPropertyShape(graph, term) {
-		shape = s.GetPropertyShape(graph, term)
+		shape, _ = s.GetPropertyShape(graph, term, 0)
 	} else {
-		shape = s.GetNodeShape(graph, term)
+		shape, _ = s.GetNodeShape(graph, term, 0)
 	}
 
 	return shape
@@ -49,12 +49,13 @@ type ValueType int64
 const (
 	class ValueType = iota
 	nodeKind
-	dataType
+	datatype
 )
 
 type ValueTypeConstraint struct {
 	vt   ValueType   // denotes what kind of value type we are dealing with
 	term rdf2go.Term // the associated term
+	id   int         // used to create unique references in Sparql translation
 }
 
 func (v ValueTypeConstraint) String() string {
@@ -68,13 +69,14 @@ func (v ValueTypeConstraint) String() string {
 }
 
 func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
-	uniqObj := obj + strconv.Itoa(int(v.vt)) + v.term.RawValue()
+	// uniqObj := obj + strconv.Itoa(int(v.vt)) + v.term.RawValue()
+	uniqObj := obj + strconv.Itoa(v.id)
 	switch v.vt {
 	case class: // UNIVERSAL PROPERTY
 
 		if path != "" { // PROPERTY SHAPE
 			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj,
-				" . FILTER NOT EXISTS {", uniqObj, "rdf2go:type/rdf2gos:subClassOf* ",
+				" . FILTER NOT EXISTS {", uniqObj, " rdf:type/rdf:subClassOf* ",
 				v.term.String(), "} . }.")
 		} else { // NODE SHAPE
 			out = obj + " rdf2go:type/rdf2gos:subClassOf* " + v.term.String() + "."
@@ -118,7 +120,7 @@ func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
 			}
 		}
 
-	case dataType: // UNIVERSAL PROPERTY
+	case datatype: // UNIVERSAL PROPERTY
 		if path != "" {
 			inner := "FILTER ( datatype( " + uniqObj + ") != " + v.term.RawValue() + " ) ."
 
@@ -134,13 +136,13 @@ func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
 
 // ExtractValueTypeConstraint gets the input rdf2go graph and a goal term and tries to
 // extract a ValueTypeConstraint (sh:class, sh:dataType or sh:dataType) from it
-func (s *ShaclDocument) ExtractValueTypeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out ValueTypeConstraint) {
+func ExtractValueTypeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out ValueTypeConstraint) {
 	switch triple.Predicate.RawValue() {
 	case _sh + "class":
-		out = ValueTypeConstraint{class, triple.Object}
+		out = ValueTypeConstraint{class, triple.Object, id}
+	case _sh + "datakind":
+		out = ValueTypeConstraint{datatype, triple.Object, id}
 	case _sh + "nodeKind":
-		out = ValueTypeConstraint{nodeKind, triple.Object}
-	case _sh + "dataType":
 		switch triple.Object.RawValue() {
 		case _sh + "NodeKind", _sh + "BlankNode", _sh + "IRI",
 			_sh + "Literal", _sh + "BlankNodeOrIRI", _sh + "BlankNodeOrLiteral",
@@ -149,7 +151,7 @@ func (s *ShaclDocument) ExtractValueTypeConstraint(graph *rdf2go.Graph, triple *
 			log.Panicln("Object val of dataType breaks standard ", triple)
 		}
 
-		out = ValueTypeConstraint{dataType, triple.Object}
+		out = ValueTypeConstraint{nodeKind, triple.Object, id}
 	default:
 		log.Panicln("Triple is not proper value type constr. ", triple)
 	}
@@ -168,6 +170,7 @@ const (
 type ValueRangeConstraint struct {
 	vr    ValueRange // denotes what kind of value range constraint we have
 	value int        // the associated the integer value of the constraint
+	id    int        // used to create unique references in Sparql translation
 }
 
 func (v ValueRangeConstraint) String() string {
@@ -183,7 +186,8 @@ func (v ValueRangeConstraint) String() string {
 }
 
 func (v ValueRangeConstraint) SparqlBody(obj, path string) (out string) {
-	uniqObj := obj + strconv.Itoa(int(v.vr)) + strconv.Itoa(v.value)
+	// uniqObj := obj + strconv.Itoa(int(v.vr)) + strconv.Itoa(v.value)
+	uniqObj := obj + strconv.Itoa(v.id)
 
 	switch v.vr {
 	case minExcl: // UNIVERSAL PROPERTY
@@ -221,19 +225,19 @@ func (v ValueRangeConstraint) SparqlBody(obj, path string) (out string) {
 	return out
 }
 
-func (s *ShaclDocument) ExtractValueRangeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out ValueRangeConstraint) {
+func ExtractValueRangeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out ValueRangeConstraint) {
 	val, err := strconv.Atoi(triple.Object.RawValue())
 	check(err)
 
 	switch triple.Predicate.RawValue() {
 	case _sh + "minExclusive":
-		out = ValueRangeConstraint{minExcl, val}
+		out = ValueRangeConstraint{minExcl, val, id}
 	case _sh + "maxExclusive":
-		out = ValueRangeConstraint{maxExcl, val}
+		out = ValueRangeConstraint{maxExcl, val, id}
 	case _sh + "ValueRangeConstraint":
-		out = ValueRangeConstraint{minIncl, val}
+		out = ValueRangeConstraint{minIncl, val, id}
 	case _sh + "maxInclusive":
-		out = ValueRangeConstraint{maxInclu, val}
+		out = ValueRangeConstraint{maxInclu, val, id}
 	default:
 		log.Panicln("Triple is not proper value range constr. ", triple)
 	}
@@ -258,6 +262,7 @@ type StringBasedConstraint struct {
 	flags      string
 	langs      []string
 	uniqueLang bool // property shapes ony
+	id         int  // used to create unique references in Sparql translation
 }
 
 func (v StringBasedConstraint) String() string {
@@ -275,7 +280,8 @@ func (v StringBasedConstraint) String() string {
 }
 
 func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
-	uniqObj := obj + strconv.Itoa(int(v.sb)) + strconv.Itoa(v.length) + v.pattern + v.flags
+	// uniqObj := obj + strconv.Itoa(int(v.sb)) + strconv.Itoa(v.length) + v.pattern + v.flags
+	uniqObj := obj + strconv.Itoa(v.id)
 
 	switch v.sb {
 	case minLen: // UNIVERSAL PROPERTY
@@ -295,20 +301,21 @@ func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
 		}
 
 	case pattern: // UNIVERSAL PROPERTY
+		v.pattern = strings.ReplaceAll(v.pattern, "\\", "\\\\")
 		if path != "" {
 			inner := ""
-			if len(v.flags) == 0 {
-				inner = fmt.Sprint("FILTER (isBlank(" + uniqObj + ") || !regex(str(" + uniqObj + "), " + v.pattern + ", " + v.flags + ") )")
+			if len(v.flags) != 0 {
+				inner = fmt.Sprint("FILTER (isBlank(" + uniqObj + ") || !regex(str(" + uniqObj + "), \"" + v.pattern + "\", " + v.flags + ") )")
 			} else {
-				inner = fmt.Sprint("FILTER (isBlank(" + uniqObj + ") || !regex(str(" + uniqObj + "), " + v.pattern + ") )")
+				inner = fmt.Sprint("FILTER (isBlank(" + uniqObj + ") || !regex(str(" + uniqObj + "), \"" + v.pattern + "\") )")
 			}
 
 			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
 		} else {
-			if len(v.flags) == 0 {
-				out = fmt.Sprint("FILTER (!isBlank(" + obj + ") && regex(str(" + obj + "), " + v.pattern + ", " + v.flags + ") )")
+			if len(v.flags) != 0 {
+				out = fmt.Sprint("FILTER (!isBlank(" + obj + ") && regex(str(" + obj + "), \"" + v.pattern + "\", " + v.flags + ") )")
 			} else {
-				out = fmt.Sprint("FILTER (!isBlank(" + obj + ") && regex(str(" + obj + "), " + v.pattern + ") )")
+				out = fmt.Sprint("FILTER (!isBlank(" + obj + ") && regex(str(" + obj + "), \"" + v.pattern + "\") )")
 			}
 		}
 	case langIn:
@@ -320,23 +327,32 @@ func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
 	return out
 }
 
-func (s *ShaclDocument) ExtractStringBasedConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out StringBasedConstraint) {
+func ExtractStringBasedConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out StringBasedConstraint) {
 	switch triple.Predicate.RawValue() {
 	case _sh + "minLength":
 		val, err := strconv.Atoi(triple.Object.RawValue())
 		check(err)
-		out = StringBasedConstraint{sb: minLen, length: val}
+		out = StringBasedConstraint{sb: minLen, length: val, id: id}
 	case _sh + "maxLength":
 		val, err := strconv.Atoi(triple.Object.RawValue())
 		check(err)
-		out = StringBasedConstraint{sb: maxLen, length: val}
+		out = StringBasedConstraint{sb: maxLen, length: val, id: id}
 	case _sh + "pattern":
 		// check if "sh:flags" defined:
 		flags := graph.One(triple.Subject, res(_sh+"flags"), nil)
 		if flags != nil {
-			out = StringBasedConstraint{sb: pattern, pattern: triple.Object.RawValue(), flags: flags.Object.RawValue()}
+			out = StringBasedConstraint{
+				sb:      pattern,
+				pattern: triple.Object.RawValue(),
+				flags:   flags.Object.RawValue(),
+				id:      id,
+			}
 		} else {
-			out = StringBasedConstraint{sb: pattern, pattern: triple.Object.RawValue()}
+			out = StringBasedConstraint{
+				sb:      pattern,
+				pattern: triple.Object.RawValue(),
+				id:      id,
+			}
 		}
 
 	case _sh + "uniqueLang":
@@ -351,7 +367,11 @@ func (s *ShaclDocument) ExtractStringBasedConstraint(graph *rdf2go.Graph, triple
 			log.Panicln("StringBasedConstraint not using proper value: ", triple)
 		}
 
-		out = StringBasedConstraint{sb: uniqLang, uniqueLang: val}
+		out = StringBasedConstraint{
+			sb:         uniqLang,
+			uniqueLang: val,
+			id:         id,
+		}
 	default:
 		log.Panicln("Triple is not proper value range constr. ", triple)
 	}
@@ -371,6 +391,7 @@ const (
 type PropertyPairConstraint struct {
 	pp   PropertyPair
 	term rdf2go.Term
+	id   int // used to create unique references in Sparql translation
 }
 
 func (v PropertyPairConstraint) String() string {
@@ -390,7 +411,8 @@ func (v PropertyPairConstraint) String() string {
 // constrained, this will differ between node and property shapes, and path  is non-empty if
 // called by a property shape.
 func (v PropertyPairConstraint) SparqlBody(obj, path string) (out string) {
-	uniqObj := obj + strconv.Itoa(int(v.pp)) + v.term.RawValue()
+	// uniqObj := obj + strconv.Itoa(int(v.pp)) + v.term.RawValue()
+	uniqObj := obj + strconv.Itoa(v.id)
 
 	switch v.pp {
 	case equals: // Universal Property: set equality between value nodes and objects reachable via equals
@@ -421,7 +443,7 @@ func (v PropertyPairConstraint) SparqlBody(obj, path string) (out string) {
 	return out
 }
 
-func (s *ShaclDocument) ExtractPropertyPairConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out PropertyPairConstraint) {
+func ExtractPropertyPairConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out PropertyPairConstraint) {
 	switch triple.Predicate.RawValue() {
 	case _sh + "equals":
 		out.pp = equals
@@ -435,11 +457,13 @@ func (s *ShaclDocument) ExtractPropertyPairConstraint(graph *rdf2go.Graph, tripl
 		log.Panicln("Triple is not proper property pair constr. ", triple)
 	}
 	out.term = triple.Object
+	out.id = id
 	return out
 }
 
 type AndListConstraint struct {
 	shapes []ShapeRef
+	id     int // used to create unique references in Sparql translation
 }
 
 func (a AndListConstraint) String() string {
@@ -471,7 +495,7 @@ func IsPropertyShape(graph *rdf2go.Graph, term rdf2go.Term) bool {
 	return res != nil
 }
 
-func (s *ShaclDocument) ExtractAndListConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out AndListConstraint) {
+func (s *ShaclDocument) ExtractAndListConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out AndListConstraint) {
 	if triple.Predicate.RawValue() != _sh+"and" {
 		log.Panicln("Called ExtractAndListConstraint function at wrong triple", triple)
 	}
@@ -520,6 +544,7 @@ func (s *ShaclDocument) ExtractAndListConstraint(graph *rdf2go.Graph, triple *rd
 	}
 
 	out.shapes = shapeRefs
+	out.id = id
 	return out
 }
 
@@ -558,6 +583,7 @@ func (s *ShaclDocument) ExtractInConstraint(graph *rdf2go.Graph, triple *rdf2go.
 
 type NotShapeConstraint struct {
 	shape ShapeRef
+	id    int // used to create unique references in Sparql translation
 }
 
 func (n NotShapeConstraint) String() string {
@@ -577,7 +603,7 @@ func (n NotShapeConstraint) String() string {
 	return fmt.Sprint(_sh, "not ", shapeString)
 }
 
-func (s *ShaclDocument) ExtractNotShapeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out NotShapeConstraint) {
+func (s *ShaclDocument) ExtractNotShapeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out NotShapeConstraint) {
 	if triple.Predicate.RawValue() != _sh+"not" {
 		log.Panicln("Called ExtractNotShapeConstraint function at wrong triple", triple)
 	}
@@ -600,11 +626,13 @@ func (s *ShaclDocument) ExtractNotShapeConstraint(graph *rdf2go.Graph, triple *r
 	}
 
 	out.shape = sr
+	out.id = id
 	return out
 }
 
 type OrShapeConstraint struct {
 	shapes []ShapeRef
+	id     int // used to create unique references in Sparql translation
 }
 
 func (o OrShapeConstraint) String() string {
@@ -628,7 +656,7 @@ func (o OrShapeConstraint) String() string {
 	return fmt.Sprint(_sh, "or (", strings.Join(shapeStrings, " "), ")")
 }
 
-func (s *ShaclDocument) ExtractOrShapeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out OrShapeConstraint) {
+func (s *ShaclDocument) ExtractOrShapeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out OrShapeConstraint) {
 	if triple.Predicate.RawValue() != _sh+"or" {
 		log.Panicln("Called ExtractAndListConstraint function at wrong triple", triple)
 	}
@@ -677,11 +705,13 @@ func (s *ShaclDocument) ExtractOrShapeConstraint(graph *rdf2go.Graph, triple *rd
 	}
 
 	out.shapes = shapeRefs
+	out.id = id
 	return out
 }
 
 type XoneShapeConstraint struct {
 	shapes []ShapeRef
+	id     int // used to create unique references in Sparql translation
 }
 
 func (x XoneShapeConstraint) String() string {
@@ -705,7 +735,7 @@ func (x XoneShapeConstraint) String() string {
 	return fmt.Sprint(_sh, "xone (", strings.Join(shapeStrings, " "), ")")
 }
 
-func (s *ShaclDocument) ExtractXoneShapeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out XoneShapeConstraint) {
+func (s *ShaclDocument) ExtractXoneShapeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out XoneShapeConstraint) {
 	if triple.Predicate.RawValue() != _sh+"xone" {
 		log.Panicln("Called ExtractXoneShapeConstraint function at wrong triple", triple)
 	}
@@ -754,6 +784,7 @@ func (s *ShaclDocument) ExtractXoneShapeConstraint(graph *rdf2go.Graph, triple *
 	}
 
 	out.shapes = shapeRefs
+	out.id = id
 	return out
 }
 
@@ -762,6 +793,7 @@ type QSConstraint struct {
 	disjoint bool     // defines disjoinedness over 'sibling' qualified shapes
 	min      int      // if 0, then undefined
 	max      int      // if 0, then undefined
+	id       int      // used to create unique references in Sparql translation
 }
 
 func (q QSConstraint) String() string {
@@ -791,7 +823,7 @@ func (q QSConstraint) String() string {
 
 // ExtractQSConstraint extract the needed information for a given triple with sh:qualifiedValueShape
 // as its property, it fails if called with any other kind of triple as argument
-func (s *ShaclDocument) ExtractQSConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out QSConstraint) {
+func (s *ShaclDocument) ExtractQSConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple, id int) (out QSConstraint) {
 	if triple.Predicate.RawValue() != _sh+"qualifiedValueShape" {
 		log.Panicln("Called ExtractQSConstraint function at wrong triple", triple)
 	}
@@ -843,7 +875,7 @@ func (s *ShaclDocument) ExtractQSConstraint(graph *rdf2go.Graph, triple *rdf2go.
 	}
 
 	out.shape = sr
-
+	out.id = id
 	return out
 }
 
@@ -924,7 +956,7 @@ func (o ZerOrOnePath) PropertyString() string {
 
 // ExtractPropertyPath takes the input graph, and one value term from an sh:path constraint,
 // and extracts the `full` property path
-func (s *ShaclDocument) ExtractPropertyPath(graph *rdf2go.Graph, initTerm rdf2go.Term) (out PropertyPath) {
+func ExtractPropertyPath(graph *rdf2go.Graph, initTerm rdf2go.Term) (out PropertyPath) {
 	// fmt.Println("Term: ", initTerm)
 
 	// check if term is a blank
@@ -937,20 +969,20 @@ func (s *ShaclDocument) ExtractPropertyPath(graph *rdf2go.Graph, initTerm rdf2go
 		switch triple.Predicate.RawValue() {
 		case _sh + "inversePath":
 			further := triple.Object
-			out = InversePath{path: s.ExtractPropertyPath(graph, further)}
+			out = InversePath{path: ExtractPropertyPath(graph, further)}
 		case _sh + "alternativePath":
 			further := triple.Object
-			sequence := s.ExtractPropertyPath(graph, further).(SequencePath)
-			out = AlternativePath{paths: sequence.paths}
+			sequence := ExtractPropertyPath(graph, further).(SequencePath)
+			out = AlternativePath(sequence)
 		case _sh + "zeroOrMorePath":
 			further := triple.Object
-			out = ZerOrMorePath{path: s.ExtractPropertyPath(graph, further)}
+			out = ZerOrMorePath{path: ExtractPropertyPath(graph, further)}
 		case _sh + "oneOrMorePath":
 			further := triple.Object
-			out = OneOrMorePath{path: s.ExtractPropertyPath(graph, further)}
+			out = OneOrMorePath{path: ExtractPropertyPath(graph, further)}
 		case _sh + "zeroOrOnePath":
 			further := triple.Object
-			out = ZerOrOnePath{path: s.ExtractPropertyPath(graph, further)}
+			out = ZerOrOnePath{path: ExtractPropertyPath(graph, further)}
 		case _rdf + "first", _rdf + "rest":
 			allTriples := graph.All(initTerm, nil, nil) // get both triples
 			var first PropertyPath
@@ -964,14 +996,14 @@ func (s *ShaclDocument) ExtractPropertyPath(graph *rdf2go.Graph, initTerm rdf2go
 				case _rdf + "nil": // to cover the edge case that we get a top level nil somehow
 					foundNil = true
 				case _rdf + "first":
-					first = s.ExtractPropertyPath(graph, allTriples[i].Object)
+					first = ExtractPropertyPath(graph, allTriples[i].Object)
 					foundFirst = true
 				case _rdf + "rest":
 					foundRest = true
 					if allTriples[i].Object.RawValue() == _rdf+"nil" {
 						rest = nil
 					} else {
-						restRef := s.ExtractPropertyPath(graph, allTriples[i].Object)
+						restRef := ExtractPropertyPath(graph, allTriples[i].Object)
 						rest = &restRef
 					}
 				}
@@ -1003,8 +1035,8 @@ func (s *ShaclDocument) ExtractPropertyPath(graph *rdf2go.Graph, initTerm rdf2go
 	return out
 }
 
-func (s *ShaclDocument) GetPropertyShape(graph *rdf2go.Graph, term rdf2go.Term) (out PropertyShape) {
-	out.shape = s.GetNodeShape(graph, term)
+func (s *ShaclDocument) GetPropertyShape(graph *rdf2go.Graph, term rdf2go.Term, id int) (out PropertyShape, outInt int) {
+	out.shape, id = s.GetNodeShape(graph, term, id)
 
 	for i := range out.shape.deps { // all shape dependencies of property shapes are, by def., external
 		out.shape.deps[i].external = true
@@ -1016,7 +1048,7 @@ func (s *ShaclDocument) GetPropertyShape(graph *rdf2go.Graph, term rdf2go.Term) 
 	for i := range triples {
 		switch triples[i].Predicate.RawValue() {
 		case _sh + "path":
-			path := s.ExtractPropertyPath(graph, triples[i].Object)
+			path := ExtractPropertyPath(graph, triples[i].Object)
 			out.path = path
 			foundPath = true
 		case _sh + "name":
@@ -1027,6 +1059,7 @@ func (s *ShaclDocument) GetPropertyShape(graph *rdf2go.Graph, term rdf2go.Term) 
 			out.minCount = val
 		case _sh + "maxCount":
 			val, err := strconv.Atoi(triples[i].Object.RawValue())
+
 			check(err)
 			out.maxCount = val
 		}
@@ -1038,27 +1071,30 @@ func (s *ShaclDocument) GetPropertyShape(graph *rdf2go.Graph, term rdf2go.Term) 
 
 	// No need for a separate dependency check, since GetNodeShape above already took care of it
 
-	return out
+	return out, id
 }
 
 // TODO: if there are valid SHACL docs with collections of targets, then extend this to support it
 
 type TargetExpression interface {
 	String() string
+	Target()
 }
 
-type TargetIndirect struct {
-	reference string          // to know with attribute to project
-	query     SparqlQueryFlat // expressing indirect dependencies as a Sparql Query
-}
+// type TargetIndirect struct {
+// 	reference string          // to know with attribute to project
+// 	query     SparqlQueryFlat // expressing indirect dependencies as a Sparql Query
+// }
 
-func (t TargetIndirect) String() string {
-	return fmt.Sprint("An indirect target dependency (form of a query).")
-}
+// func (t TargetIndirect) String() string {
+// 	return "An indirect target dependency (form of a query)."
+// }
 
 type TargetClass struct {
 	class rdf2go.Term // the class that is being targeted
 }
+
+func (t TargetClass) Target() {}
 
 func (t TargetClass) String() string {
 	return t.class.RawValue()
@@ -1068,6 +1104,8 @@ type TargetObjectsOf struct {
 	path rdf2go.Term // the property the target is the object of
 }
 
+func (t TargetObjectsOf) Target() {}
+
 func (t TargetObjectsOf) String() string {
 	return t.path.RawValue()
 }
@@ -1075,6 +1113,8 @@ func (t TargetObjectsOf) String() string {
 type TargetSubjectOf struct {
 	path rdf2go.Term // the property the target is the subject of
 }
+
+func (t TargetSubjectOf) Target() {}
 
 func (t TargetSubjectOf) String() string {
 	return t.path.RawValue()
@@ -1084,11 +1124,13 @@ type TargetNode struct {
 	node rdf2go.Term // the node that is selected
 }
 
+func (t TargetNode) Target() {}
+
 func (t TargetNode) String() string {
 	return t.node.RawValue()
 }
 
-func (s *ShaclDocument) ExtractTargetExpression(graph *rdf2go.Graph, triple *rdf2go.Triple) (out TargetExpression) {
+func ExtractTargetExpression(graph *rdf2go.Graph, triple *rdf2go.Triple) (out TargetExpression) {
 	switch triple.Predicate.RawValue() {
 	case _sh + "targetNode":
 		out = TargetNode{triple.Object}
@@ -1105,9 +1147,33 @@ func (s *ShaclDocument) ExtractTargetExpression(graph *rdf2go.Graph, triple *rdf
 	return out
 }
 
+func GetTargetTerm(t TargetExpression) string {
+	var queryBody string
+	switch t := t.(type) {
+	case TargetClass:
+		queryBody = "?sub <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>/<http://www.w3.org/2000/01/rdf-schema#subClassOf>* NODE ."
+		queryBody = strings.ReplaceAll(queryBody, "NODE", t.class.String())
+
+	case TargetNode:
+		queryBody = " BIND (NODE AS ?this)"
+		queryBody = strings.ReplaceAll(queryBody, "NODE", t.node.String())
+
+	case TargetSubjectOf:
+		queryBody = "  ?sub NODE ?obj ."
+		queryBody = strings.ReplaceAll(queryBody, "NODE", t.path.String())
+
+	case TargetObjectsOf:
+		queryBody = " ?obj NODE ?sub ."
+		queryBody = strings.ReplaceAll(queryBody, "NODE", t.path.String())
+
+	}
+
+	return queryBody
+}
+
 // GetNodeShape takes as input and rdf2go graph and a term signifying a NodeShape
 // and then iteratively queries the rdf2go graph to extract all its details
-func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term) (out NodeShape) {
+func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, id int) (out NodeShape, outId int) {
 	out.IRI = term
 	triples := graph.All(term, nil, nil)
 	var deps []dependency
@@ -1121,47 +1187,58 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term) (out
 	// var positives []string
 	// var negatives []string
 
+	count := id
+
 	for i := range triples {
 		switch triples[i].Predicate.RawValue() {
 		// target expressions
 		case _sh + "targetClass", _sh + "targetNode", _sh + "targetObjectsOf", _sh + "targetSubjectsOf":
-			te := s.ExtractTargetExpression(graph, triples[i])
+			te := ExtractTargetExpression(graph, triples[i])
 			out.target = append(out.target, te)
 		// ValueTypes constraints
 		case _sh + "class", _sh + "dataType", _sh + "nodeKind":
-			vt := s.ExtractValueTypeConstraint(graph, triples[i])
+			vt := ExtractValueTypeConstraint(graph, triples[i], count)
+			count++
 			out.valuetypes = append(out.valuetypes, vt)
 		// ValueRanges constraints
 		case _sh + "minExclusive", _sh + "maxExclusive", _sh + "minInclusive", _sh + "maxInclusive":
-			vr := s.ExtractValueRangeConstraint(graph, triples[i])
+			vr := ExtractValueRangeConstraint(graph, triples[i], count)
+			count++
 			out.valueranges = append(out.valueranges, vr)
 		// string based Constraints
 		case _sh + "minLength", _sh + "maxLength", _sh + "pattern", _sh + "languageIn":
-			sr := s.ExtractStringBasedConstraint(graph, triples[i])
+			sr := ExtractStringBasedConstraint(graph, triples[i], count)
+			count++
 			out.stringconts = append(out.stringconts, sr)
 		// property pair constraints
 		case _sh + "equals", _sh + "disjoint", _sh + "lessThan", _sh + "lessThanOrEquals":
-			pp := s.ExtractPropertyPairConstraint(graph, triples[i])
+			pp := ExtractPropertyPairConstraint(graph, triples[i], count)
+			count++
 			out.propairconts = append(out.propairconts, pp)
 		// Combine with PropertyShape constraint
 		case _sh + "property":
-			pshape := s.GetPropertyShape(graph, triples[i].Object)
+			var pshape PropertyShape
+			pshape, count = s.GetPropertyShape(graph, triples[i].Object, count)
 
 			// pDeps := markPos(pshape.shape.deps, len(out.properties))
 			deps = append(deps, pshape.shape.deps...) // should be ok
 			out.properties = append(out.properties, pshape)
 		// logic-based constraints
 		case _sh + "and":
-			ac := s.ExtractAndListConstraint(graph, triples[i])
+			ac := s.ExtractAndListConstraint(graph, triples[i], count)
+			count++
 			out.ands.shapes = append(out.ands.shapes, ac.shapes...) // simply add them to the pile
 		case _sh + "or":
-			oc := s.ExtractOrShapeConstraint(graph, triples[i])
+			oc := s.ExtractOrShapeConstraint(graph, triples[i], count)
+			count++
 			out.ors = append(out.ors, oc)
 		case _sh + "not":
-			ns := s.ExtractNotShapeConstraint(graph, triples[i])
+			ns := s.ExtractNotShapeConstraint(graph, triples[i], count)
+			count++
 			out.nots = append(out.nots, ns)
 		case _sh + "xone":
-			xs := s.ExtractXoneShapeConstraint(graph, triples[i])
+			xs := s.ExtractXoneShapeConstraint(graph, triples[i], count)
+			count++
 			out.xones = append(out.xones, xs)
 		// Combine with other NodeShape constraint
 		case _sh + "node":
@@ -1185,7 +1262,8 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term) (out
 
 			// qualified shape constraint
 		case _sh + "qualifiedValueShape":
-			qs := s.ExtractQSConstraint(graph, triples[i])
+			qs := s.ExtractQSConstraint(graph, triples[i], count)
+			count++
 			out.qualifiedShapes = append(out.qualifiedShapes, qs)
 		// closedness condition , with manually specifiable exceptions
 		case _sh + "closed":
@@ -1201,6 +1279,7 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term) (out
 		case _sh + "ignoredProperties":
 			// validation report related options
 			// TODO
+
 		case _sh + "hasValue":
 			out.hasValue = &triples[i].Object
 		case _sh + "in":
@@ -1209,7 +1288,7 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term) (out
 			out.severity = &triples[i].Object
 		case _sh + "message":
 			out.message = &triples[i].Object
-		// allows NodeShape to be manually turned off (i.e. not be considered in validation)
+		// allows NodeShape to be manually 'turned off' (i.e. not be considered in validation)
 		case _sh + "deactivated":
 			tmp := triples[i].Object.RawValue()
 			switch tmp {
@@ -1287,5 +1366,5 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term) (out
 
 	out.deps = deps
 
-	return out
+	return out, count
 }

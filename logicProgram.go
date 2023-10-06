@@ -99,12 +99,12 @@ func (p program) Answer() []Table {
 
 	cmd.Stdin = strings.NewReader(outLP)
 
-	// fmt.Println("----\n\n,", outLP, "\n\n-------")
+	fmt.Println("----\n\n,", outLP, "\n\n-------")
 
 	out, _ := cmd.Output()
 	// check(err)
 
-	outString := fmt.Sprintf("%s", out)
+	outString := string(out)
 
 	parser := participle.MustBuild(&DLVOutput{}, participle.UseLookahead(1), participle.Lexer(graphLexer),
 		participle.Elide("Comment", "Whitespace"))
@@ -309,8 +309,8 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bo
 		log.Panicln("Not provided a conditional table")
 	}
 
-	if internalDeps {
-	}
+	// if internalDeps {
+	// }
 
 	head := table.header[0] + " (  VAR )"
 	var body []string

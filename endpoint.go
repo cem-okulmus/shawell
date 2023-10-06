@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,10 +17,10 @@ import (
 // GetTable returns from a query result a table, and a header of shape names
 
 type Table struct {
-	query   SparqlQueryFlat // the _flattened_ query  which generated the Table
 	header  []string
 	content [][]rdf.Term
 	cache   []string
+	merged  bool // indicates the table generate by merger, thus one query does not capture contents
 }
 
 func (t Table) String() string {
@@ -130,6 +131,20 @@ func (t Table) Limit(n int) string {
 	return sb.String()
 }
 
+func (t *Table) Merge(other Table) error {
+	// check if the two tables share the same header
+
+	for i := range t.header {
+		if t.header[i] != other.header[i] {
+			return errors.New("Incompatible tables to merge")
+		}
+	}
+
+	t.content = append(t.content, other.content...)
+	t.merged = true
+	return nil
+}
+
 func GetTable(r *sparql.Results) Table {
 	var resultTable [][]rdf.Term
 
@@ -161,42 +176,145 @@ func GetTable(r *sparql.Results) Table {
 }
 
 type endpoint interface {
-	Answer(ns *Shape, target SparqlQueryFlat) Table
+	Answer(ns *Shape, target []SparqlQueryFlat) Table
 	Query(s SparqlQuery) Table
 	QueryFlat(s SparqlQueryFlat) Table
 	QueryAsk(s string) bool
+	Insert(input *rdf.Graph) error
 }
 
 type SparqlEndpoint struct {
-	repo *sparql.Repo
+	repo           *sparql.Repo
+	repoUpdate     *sparql.Repo
+	fromGraph      string
+	debug          bool
+	updateEndpoint bool
 }
 
-func GetSparqlEndpoint(address, username, password string) SparqlEndpoint {
+func GetSparqlEndpoint(address, updateAddr, username, password string, debug, update bool, graph string) SparqlEndpoint {
 	repo, err := sparql.NewRepo(address,
 		sparql.DigestAuth(username, password),
 		sparql.Timeout(time.Second*600),
 	)
 	check(err)
 
-	return SparqlEndpoint{repo: repo}
+	var repoUpdate *sparql.Repo
+
+	if update {
+		repoUpdate, err = sparql.NewRepo(updateAddr,
+			sparql.DigestAuth(username, password),
+			sparql.Timeout(time.Second*600),
+		)
+		check(err)
+	}
+
+	return SparqlEndpoint{
+		repo:           repo,
+		repoUpdate:     repoUpdate,
+		debug:          debug,
+		updateEndpoint: update,
+		fromGraph:      graph,
+	}
+}
+
+// Insert takes as input an RDF graph, and inserts it into the Sparql Endpoint
+func (s SparqlEndpoint) Insert(input *rdf.Graph) (out error) {
+	// extract graph name (this assumes we only use this for W3C test suites w/ fixed format)
+
+	_sht := prefixes["sht:"] // living dangerously
+
+	found := input.One(nil, res(_rdf+"type"), res(_sht+"Validate"))
+
+	if found == nil {
+		fmt.Println("Prefixes: ", prefixes)
+		return errors.New("not a valid test suite file")
+	}
+
+	graphName := found.Subject
+
+	// clear graph first
+
+	var err error
+	if s.updateEndpoint {
+		err = s.repoUpdate.Update(fmt.Sprint("CLEAR GRAPH ", graphName.String()))
+	} else {
+		_, err = s.repo.Query(fmt.Sprint("CLEAR GRAPH ", graphName.String()))
+	}
+
+	if err != nil {
+		return err
+	}
+
+	var sb strings.Builder
+
+	for k, v := range prefixes {
+		sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+	}
+
+	sb.WriteString("INSERT  DATA { \n")
+
+	sb.WriteString(fmt.Sprint("GRAPH ", graphName.String(), " { \n"))
+
+	for triple := range input.IterTriples() {
+		sb.WriteString(fmt.Sprint(triple.Subject, " ", triple.Predicate, " ", triple.Object, ". \n"))
+	}
+
+	sb.WriteString("} \n }")
+
+	insertString := sb.String()
+
+	// fmt.Println(de)
+	if s.debug {
+		fmt.Println("INSERT String \n ", insertString)
+	}
+
+	if s.updateEndpoint {
+		err = s.repoUpdate.Update(insertString)
+	} else {
+		_, err = s.repo.Query(insertString)
+	}
+
+	if err != nil {
+		out = err
+	} else {
+		out = nil
+	}
+
+	return out
 }
 
 // Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
-func (s SparqlEndpoint) Answer(ns *Shape, target SparqlQueryFlat) Table {
-	query := (*ns).ToSparql(target)
-	// fmt.Println("Query: \n", query.String())
-	res, err := s.repo.Query(query.String())
-	if err != nil {
-		fmt.Println("Query in question:\n ", query)
-		panic(err)
+// In case of multiple targets, each target produces its own query, and results are concatenated
+func (s SparqlEndpoint) Answer(ns *Shape, targets []SparqlQueryFlat) Table {
+	var out *Table = nil
+
+	// repeat this for each individual target, and collect the results
+	for i := range targets {
+		query := (*ns).ToSparql(targets[i])
+
+		if s.debug {
+			fmt.Println("Answer query:  \n", query)
+		}
+
+		res, err := s.repo.Query(query.String())
+		if err != nil {
+			fmt.Println("Query in question:\n ", query)
+			panic(err)
+		}
+
+		if s.debug {
+			fmt.Println("Output: \n, ", out)
+		}
+
+		tmp := GetTable(res)
+		if out == nil {
+			out = &tmp
+		} else {
+			out.Merge(tmp)
+		}
 	}
 
-	// fmt.Println("Query:  \n", query)
-
-	out := GetTable(res)
-
-	out.query = (*ns).ToSparqlFlat(target)
-	return out
+	return *out
 }
 
 func (s SparqlEndpoint) Query(query SparqlQuery) Table {
@@ -206,9 +324,16 @@ func (s SparqlEndpoint) Query(query SparqlQuery) Table {
 		fmt.Println("Query in question:\n ", query.String())
 		panic(err)
 	}
-	// fmt.Println("Query:  \n", query)
+
+	if s.debug {
+		fmt.Println("Query:  \n", query)
+	}
 
 	out := GetTable(res)
+
+	if s.debug {
+		fmt.Println("Output: \n, ", out)
+	}
 
 	// out.query = query
 	return out
@@ -221,10 +346,15 @@ func (s SparqlEndpoint) QueryFlat(query SparqlQueryFlat) Table {
 		fmt.Println("Query in question:\n ", query.String())
 		panic(err)
 	}
-	// fmt.Println("QueryFLAT:  \n", query)
+	if s.debug {
+		fmt.Println("QueryFlat:  \n", query)
+	}
 
 	out := GetTable(res)
-	// fmt.Println("Result: \n", out)
+
+	if s.debug {
+		fmt.Println("Output: \n, ", out)
+	}
 
 	// out.query = query
 	return out
