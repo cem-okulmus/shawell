@@ -5,37 +5,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 
-	rdf "github.com/deiu/rdf2go"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 
-	"github.com/knakk/sparql"
 	"golang.org/x/exp/constraints"
+
+	"github.com/cem-okulmus/sparql"
 )
-
-// GetTable returns from a query result a table, and a header of shape names
-
-type Table struct {
-	header  []string
-	content [][]rdf.Term
-	cache   []string
-	merged  bool // indicates the table generate by merger, thus one query does not capture contents
-}
-
-func (t Table) String() string {
-	return t.Limit(len(t.content))
-}
-
-func (t Table) GetColumn(column int) []string {
-	var out []string
-
-	for i := range t.content {
-		out = append(out, t.content[i][column].String())
-	}
-
-	return out
-}
 
 // Sorted has complexity: O(n * log(n)), a needs to be sorted
 func SortedGeneric[T constraints.Ordered](a []T, b []T) []T {
@@ -53,134 +30,14 @@ func SortedGeneric[T constraints.Ordered](a []T, b []T) []T {
 	return set
 }
 
-// CheckInclusion checks for a given column of another table whether it's contained
-// fully in the first column of this row. (TODO could be generalised a bit if needed)
-func (t *Table) CheckInclusion(other []rdf.Term) bool {
-	if len(t.content) == 0 && len(other) != 0 {
-		return false // empty Table contains nothing non-empty
-	}
-	if len(other) == 0 {
-		return true // empty list is contained in anything
-	}
-
-	if len(t.cache) == 0 {
-		for i := range t.content {
-			t.cache = append(t.cache, t.content[i][0].RawValue())
-		}
-	}
-
-	var otherString []string
-
-	for i := range other {
-		otherString = append(otherString, other[i].RawValue())
-	}
-
-	intersectSize := len(SortedGeneric(t.cache, otherString))
-
-	fmt.Println("This: ", t.cache)
-	fmt.Println("Other: ", otherString)
-
-	fmt.Println("Intersect Size: ", intersectSize)
-
-	return intersectSize == len((otherString))
-}
-
-func (t Table) FindRow(column int, value string) (int, bool) {
-	var found bool
-	var foundRow int
-
-	for i := range t.content {
-		if t.content[i][column].String() == value {
-			foundRow = i
-			found = true
-			break
-		}
-	}
-
-	return foundRow, found
-}
-
-func (t Table) Limit(n int) string {
-	if n > len(t.content) {
-		n = len(t.content)
-	}
-	var sb strings.Builder
-	const padding = 4
-	w := tabwriter.NewWriter(&sb, 0, 0, padding, ' ', tabwriter.TabIndent)
-
-	fmt.Fprint(w, "\n", strings.Join(t.header, "\t"), "\t\n")
-
-	for i := range t.content[:n] {
-
-		for j := range t.content[i] {
-			fmt.Fprint(w, abbr(t.content[i][j].String()))
-			fmt.Fprint(w, "\t ")
-		}
-		fmt.Fprint(w, "\n")
-	}
-
-	if n < len(t.content) {
-		fmt.Fprint(w, "\n\n\t\t⋮ (showing first ",
-			n, " lines from ", len(t.content), " total) \n")
-	} else {
-		fmt.Fprint(w, "\n\t\t ( Total: ", len(t.content), " lines) \n")
-	}
-
-	err := w.Flush()
-	check(err)
-	return sb.String()
-}
-
-func (t *Table) Merge(other Table) error {
-	// check if the two tables share the same header
-
-	for i := range t.header {
-		if t.header[i] != other.header[i] {
-			return errors.New("Incompatible tables to merge")
-		}
-	}
-
-	t.content = append(t.content, other.content...)
-	t.merged = true
-	return nil
-}
-
-func GetTable(r *sparql.Results) Table {
-	var resultTable [][]rdf.Term
-
-	var ordering map[string]int = make(map[string]int)
-
-	for i, s := range r.Head.Vars {
-		ordering[s] = i
-	}
-
-	for _, t := range r.Solutions() {
-		var tupleOrdered []rdf.Term = make([]rdf.Term, len(t))
-
-		for k, v := range t {
-			if v.String() == "" {
-				continue
-			}
-
-			tupleOrdered[ordering[k]] = res(v.String()) // needed since range over map unsorted
-		}
-
-		if len(tupleOrdered) == 0 {
-			continue
-		}
-
-		resultTable = append(resultTable, tupleOrdered)
-	}
-
-	return Table{header: r.Head.Vars, content: resultTable}
-}
-
 type endpoint interface {
-	Answer(ns *Shape, target []SparqlQueryFlat) Table
-	Query(s SparqlQuery) Table
-	QueryFlat(s SparqlQueryFlat) Table
+	Answer(ns Shape, target []SparqlQueryFlat) Table[rdf.Term]
+	Query(s SparqlQuery) Table[rdf.Term]
+	QueryFlat(s SparqlQueryFlat) Table[rdf.Term]
 	QueryAsk(s string) bool
-	Insert(input *rdf.Graph) error
+	Insert(input *rdf.Graph, fromGraph string) error
+	ClearGraph(fromGraph string) error
+	GetGraph() string
 }
 
 type SparqlEndpoint struct {
@@ -191,7 +48,7 @@ type SparqlEndpoint struct {
 	updateEndpoint bool
 }
 
-func GetSparqlEndpoint(address, updateAddr, username, password string, debug, update bool, graph string) SparqlEndpoint {
+func GetSparqlEndpoint(address, updateAddr, username, password string, debug, update bool, graph string) *SparqlEndpoint {
 	repo, err := sparql.NewRepo(address,
 		sparql.DigestAuth(username, password),
 		sparql.Timeout(time.Second*600),
@@ -208,7 +65,7 @@ func GetSparqlEndpoint(address, updateAddr, username, password string, debug, up
 		check(err)
 	}
 
-	return SparqlEndpoint{
+	return &SparqlEndpoint{
 		repo:           repo,
 		repoUpdate:     repoUpdate,
 		debug:          debug,
@@ -217,30 +74,41 @@ func GetSparqlEndpoint(address, updateAddr, username, password string, debug, up
 	}
 }
 
-// Insert takes as input an RDF graph, and inserts it into the Sparql Endpoint
-func (s SparqlEndpoint) Insert(input *rdf.Graph) (out error) {
-	// extract graph name (this assumes we only use this for W3C test suites w/ fixed format)
+func (s *SparqlEndpoint) GetGraph() string { return s.fromGraph }
 
-	_sht := prefixes["sht:"] // living dangerously
-
-	found := input.One(nil, res(_rdf+"type"), res(_sht+"Validate"))
-
-	if found == nil {
-		fmt.Println("Prefixes: ", prefixes)
-		return errors.New("not a valid test suite file")
+func (s *SparqlEndpoint) ClearGraph(fromGraph string) (out error) {
+	if fromGraph == "" {
+		out = errors.New("Need to provide a graph for the Clear command.")
+		return out
 	}
 
-	graphName := found.Subject
+	if s.updateEndpoint {
+		out = s.repoUpdate.Update(fmt.Sprint("CLEAR GRAPH ", fromGraph))
+	} else {
+		_, out = s.repo.Query(fmt.Sprint("CLEAR GRAPH ", fromGraph))
+	}
+
+	return out
+}
+
+// Insert takes as input an RDF graph, and inserts it into the Sparql Endpoint
+func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string) (out error) {
+	// extract graph name (this assumes we only use this for W3C test suites w/ fixed format)
+
+	if fromGraph != "" {
+		s.fromGraph = fromGraph
+	}
 
 	// clear graph first
 
-	var err error
-	if s.updateEndpoint {
-		err = s.repoUpdate.Update(fmt.Sprint("CLEAR GRAPH ", graphName.String()))
-	} else {
-		_, err = s.repo.Query(fmt.Sprint("CLEAR GRAPH ", graphName.String()))
-	}
+	// var err error
+	// if s.updateEndpoint {
+	// 	err = s.repoUpdate.Update(fmt.Sprint("CLEAR GRAPH ", s.fromGraph))
+	// } else {
+	// 	_, err = s.repo.Query(fmt.Sprint("CLEAR GRAPH ", s.fromGraph))
+	// }
 
+	err := s.ClearGraph(s.fromGraph)
 	if err != nil {
 		return err
 	}
@@ -253,7 +121,7 @@ func (s SparqlEndpoint) Insert(input *rdf.Graph) (out error) {
 
 	sb.WriteString("INSERT  DATA { \n")
 
-	sb.WriteString(fmt.Sprint("GRAPH ", graphName.String(), " { \n"))
+	sb.WriteString(fmt.Sprint("GRAPH ", s.fromGraph, " { \n"))
 
 	for triple := range input.IterTriples() {
 		sb.WriteString(fmt.Sprint(triple.Subject, " ", triple.Predicate, " ", triple.Object, ". \n"))
@@ -285,12 +153,12 @@ func (s SparqlEndpoint) Insert(input *rdf.Graph) (out error) {
 
 // Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
 // In case of multiple targets, each target produces its own query, and results are concatenated
-func (s SparqlEndpoint) Answer(ns *Shape, targets []SparqlQueryFlat) Table {
-	var out *Table = nil
+func (s *SparqlEndpoint) Answer(ns Shape, targets []SparqlQueryFlat) Table[rdf.Term] {
+	var out Table[rdf.Term]
 
 	// repeat this for each individual target, and collect the results
 	for i := range targets {
-		query := (*ns).ToSparql(targets[i])
+		query := ns.ToSparql(s.fromGraph, targets[i])
 
 		if s.debug {
 			fmt.Println("Answer query:  \n", query)
@@ -302,22 +170,29 @@ func (s SparqlEndpoint) Answer(ns *Shape, targets []SparqlQueryFlat) Table {
 			panic(err)
 		}
 
+		tmp := GetTable(res)
+
 		if s.debug {
-			fmt.Println("Output: \n, ", out)
+			fmt.Println("Output : \n, ", tmp)
 		}
 
-		tmp := GetTable(res)
 		if out == nil {
-			out = &tmp
+			out = tmp
 		} else {
-			out.Merge(tmp)
+			err := out.Merge(tmp)
+			check(err)
 		}
 	}
 
-	return *out
+	tmp := GetGroupedTable(out)
+	if s.debug {
+		fmt.Println("Output Final : \n, ", tmp)
+	}
+
+	return tmp
 }
 
-func (s SparqlEndpoint) Query(query SparqlQuery) Table {
+func (s *SparqlEndpoint) Query(query SparqlQuery) Table[rdf.Term] {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query.String())
 	if err != nil {
@@ -339,7 +214,7 @@ func (s SparqlEndpoint) Query(query SparqlQuery) Table {
 	return out
 }
 
-func (s SparqlEndpoint) QueryFlat(query SparqlQueryFlat) Table {
+func (s *SparqlEndpoint) QueryFlat(query SparqlQueryFlat) Table[rdf.Term] {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query.String())
 	if err != nil {
@@ -360,7 +235,7 @@ func (s SparqlEndpoint) QueryFlat(query SparqlQueryFlat) Table {
 	return out
 }
 
-func (s SparqlEndpoint) QueryAsk(query string) bool {
+func (s *SparqlEndpoint) QueryAsk(query string) bool {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query)
 	if err != nil {

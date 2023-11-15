@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	rdf "github.com/deiu/rdf2go"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 
 	"github.com/alecthomas/participle"
 	"github.com/alecthomas/participle/lexer"
@@ -48,7 +48,7 @@ type DLVOutput struct {
 	Answers []DLVAnswer ` (String|Ident|Number|Punct) "{" ( @@ ","?)* "}" (String|Ident|Number|Punct) "{" (Number|Ident|String|Punct|"("|")"|","|" ")*  "}" `
 }
 
-func (d DLVOutput) ToTables() (out []Table) {
+func (d DLVOutput) ToTables() (out []Table[rdf.Term]) {
 	answerMap := make(map[string][]string)
 
 	for i := range d.Answers {
@@ -64,7 +64,7 @@ func (d DLVOutput) ToTables() (out []Table) {
 	}
 
 	for k, v := range answerMap {
-		var tmp Table
+		var tmp TableSimple[rdf.Term]
 
 		tmp.header = append(tmp.header, k)
 
@@ -72,14 +72,14 @@ func (d DLVOutput) ToTables() (out []Table) {
 			tmp.content = append(tmp.content, []rdf.Term{res(v[i])})
 		}
 
-		out = append(out, tmp)
+		out = append(out, &tmp)
 	}
 
 	return out
 }
 
 // Answer sends the logic program to DLV, set to use well-founded semantics, and returns the output
-func (p program) Answer() []Table {
+func (p program) Answer() []Table[rdf.Term] {
 	graphLexer := lexer.Must(ebnf.New(`
     Comment = ("%" | "//") { "\u0000"…"\uffff"-"\n" } .
     Ident = (digit| alpha | "_") { Punct |  "_" | alpha | digit } .
@@ -137,18 +137,18 @@ func (p program) String() string {
 
 var qual int = 1
 
-func expandRules(values rdf.Term, indices []int, deps []dependency, header, element string) (out []rule) {
-	valuesSlice := strings.Split(strings.ToLower(values.RawValue()), " ")
+func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, header, element string) (out []rule) {
+	// valuesSlice := strings.Split(strings.ToLower(values.RawValue()), " ")
 
-	for i := range valuesSlice {
-		valuesSlice[i] = "\"" + valuesSlice[i] + "\""
-	}
+	// for i := range valuesSlice {
+	// 	valuesSlice[i] = "\"" + valuesSlice[i] + "\""
+	// }
 
 	head := fmt.Sprint(header, "(\"", strings.ToLower(element), "\")")
 
 	for _, i := range indices {
 		switch deps[i].mode {
-		case and:
+		case and, node: // should be ok?
 			var body []string
 
 			for _, ref := range deps[i].name {
@@ -242,7 +242,7 @@ func expandRules(values rdf.Term, indices []int, deps []dependency, header, elem
 			// qualHead := fmt.Sprint(mark, "Head(", element, ")")
 
 			var tmp string
-			if deps[i].max != 0 {
+			if deps[i].max != -1 {
 				tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min, ", K <= ", deps[i].max)
 			} else {
 				tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min)
@@ -304,15 +304,22 @@ func expandRules(values rdf.Term, indices []int, deps []dependency, header, elem
 	return out
 }
 
-func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bool) (out program) {
-	if len(table.header) <= 1 && !internalDeps {
+func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency, internalDeps bool) (out program) {
+	table, ok := tablePreCast.(*GroupedTable[rdf.Term])
+	if !ok {
+		log.Panicln("Passed a non-group Tabled")
+	}
+
+	header := table.GetHeader()
+
+	if len(table.group) < 1 {
 		log.Panicln("Not provided a conditional table")
 	}
 
 	// if internalDeps {
 	// }
 
-	head := table.header[0] + " (  VAR )"
+	head := header[0] + " (  VAR )"
 	var body []string
 
 	var depMap map[int]int = make(map[int]int)
@@ -321,7 +328,7 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bo
 	numMatched := 0
 
 	if internalDeps {
-		body = append(body, table.header[0]+"INTERN(  VAR )")
+		body = append(body, header[0]+"INTERN(  VAR )")
 
 		for i := range deps {
 			if !deps[i].external {
@@ -333,7 +340,7 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bo
 
 	}
 
-	for j, attr := range table.header {
+	for j, attr := range header {
 		if j == 0 {
 			continue // skip this for the main elemnet
 		}
@@ -365,23 +372,25 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bo
 
 	generalRule := rule{head: head, body: body}
 
-	for _, row := range table.content {
-		element := row[0].RawValue()
+	iterChan := table.IterTargets()
 
-		generalRuleNew := generalRule.rewrite("VAR", "\""+strings.ToLower(element)+"\"")
+	for element := range iterChan {
+		// element := row[0].RawValue()
+
+		generalRuleNew := generalRule.rewrite("VAR", "\""+strings.ToLower(element.RawValue())+"\"")
 		out.rules = append(out.rules, generalRuleNew)
 
 		var tempRules []rule // collection of all rules generated so far
 
-		for i, values := range row {
-			if i == 0 {
-				if internalDeps {
-					tempRules = expandRules(values, attrMap[i], deps, table.header[i]+"INTERN", element)
-				}
-				continue
-			}
+		// expandRules for target if InternDep
+		if internalDeps {
+			tempRules = expandRules([]rdf.Term{element}, attrMap[0], deps, header[0]+"INTERN", element.RawValue())
+		}
 
-			tempRules = expandRules(values, attrMap[i], deps, table.header[i], element)
+		for _, groupMap := range table.group {
+			for index, values := range groupMap {
+				tempRules = expandRules(values, attrMap[index], deps, header[index], element.RawValue())
+			}
 		}
 
 		out.rules = append(out.rules, tempRules...)
@@ -391,14 +400,15 @@ func (s ShaclDocument) TableToLP(table Table, deps []dependency, internalDeps bo
 }
 
 // FactsToLP assumes that the input is a unary table, ie. with only one column, will panic otherwise
-func (s ShaclDocument) FactsToLP(table Table) (out program) {
-	if len(table.header) != 1 {
+func (s ShaclDocument) FactsToLP(table Table[rdf.Term]) (out program) {
+	header := table.GetHeader()
+	if len(header) != 1 {
 		log.Panic("FactsToLP requires unary table as input.")
 	}
 
-	shape := table.header[0]
+	shape := header[0]
 
-	for _, row := range table.content {
+	for row := range table.IterRows() {
 		out.rules = append(out.rules, rule{head: fmt.Sprint(shape, "(", row[0].RawValue(), ")")})
 	}
 
@@ -428,7 +438,7 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 		log.Panic("conditional Answer for shape has not been produced yet", name)
 	}
 
-	deps := (*shape).GetDeps()
+	deps := shape.GetDeps()
 
 	areInternalDeps := false
 
@@ -437,12 +447,12 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 			areInternalDeps = true
 		}
 	}
-	if len(condTable.content) == 0 {
+	if condTable.Len() == 0 {
 		return out // empty program, since nothing in Table
 	}
 
 	// check if it is indeed a conditional table
-	if len(condTable.content[0]) == 1 && !areInternalDeps {
+	if len(condTable.GetHeader()) == 1 && !areInternalDeps {
 		// fmt.Println("Shape: ", name, " had already uncond Table.")
 		return s.FactsToLP(condTable)
 	}
@@ -454,7 +464,7 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 func (s ShaclDocument) GetAllLPs() (out program) {
 	for name, value := range s.shapeNames {
 
-		if !(*value).IsActive() {
+		if !value.IsActive() {
 			continue
 		}
 

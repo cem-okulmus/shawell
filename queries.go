@@ -15,77 +15,46 @@ import (
 
 // ToSparql produces a stand-alone sparql query that produces the list of nodes satisfying the
 // shape in the RDF graph
-func (p PropertyShape) ToSparql(target SparqlQueryFlat) (out SparqlQuery) {
+func (p *PropertyShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out SparqlQuery) {
 	// this will basically just call ToSubquery, but instead turn it into an object of type
 	// SparqlQuery, corresponding to a single node shape only having this property as a constraint
 
 	tmp := NodeShape{}
+	tmp.id = p.id
 
 	tmp.IRI = p.shape.IRI
 	tmp.properties = append(tmp.properties, p)
 
-	return tmp.ToSparql(target)
+	return tmp.ToSparql(fromGraph, target)
 }
 
-// ToSparql produces a stand-alone sparql query that produces the list of nodes satisfying the
-// shape in the RDF graph
-func (p PropertyShape) ToSparqlFlat(target SparqlQueryFlat) (out SparqlQueryFlat) {
-	// this will basically just call ToSubquery, but instead turn it into an object of type
-	// SparqlQuery, corresponding to a single node shape only having this property as a constraint
+// // ToSparql produces a stand-alone sparql query that produces the list of nodes satisfying the
+// // shape in the RDF graph
+// func (p *PropertyShape) ToSparqlFlat(target SparqlQueryFlat) (out SparqlQueryFlat) {
+// 	// this will basically just call ToSubquery, but instead turn it into an object of type
+// 	// SparqlQuery, corresponding to a single node shape only having this property as a constraint
 
-	tmp := NodeShape{}
+// 	tmp := NodeShape{}
+// 	tmp.id = p.id
+// 	tmp.IRI = p.shape.IRI
+// 	tmp.properties = append(tmp.properties, p)
 
-	tmp.IRI = p.shape.IRI
-	tmp.properties = append(tmp.properties, p)
-
-	return tmp.ToSparqlFlat(target)
-}
+// 	return tmp.ToSparqlFlat(target)
+// }
 
 // ToSubquery is used to embedd the property shape into a node shape by way of a subquery in the
 // body, and number of variables in the head. The head variables are only included in the
 // presence of referential constraints (and,or,xone,node,not, qualifiedValueShape)
-func (p PropertyShape) ToSubquery(num int) (head []string, body string, having []HavingClause) {
-	universalOnly := true
-	// referentialConsPresent := false
-
+func (p *PropertyShape) ToSubquery(num int) (head []string, body string, subquery *CountingSubQuery) {
 	objName := "?InnerObj" + strconv.Itoa(num)
 	path := p.path.PropertyString()
 
+	if p.minCount > 0 || p.maxCount > -1 {
+		subquery = &CountingSubQuery{}
+	}
 	var bodyParts []string
-	// var OuterBodyParts []string // to be used to for correlation and min/max counts
 
-	// initial := fmt.Sprint("FILTER (!BOUND(?InnerSub", num, ")  || ?InnerSub", num, "  = ?sub) .")
-	// OuterBodyParts = append(OuterBodyParts, initial)
-
-	// EXISTENTIAL { hasValue, minCount, qualifiedMinCount}
-
-	if p.shape.hasValue != nil {
-		universalOnly = false
-		out := fmt.Sprint("FILTER EXISTS { ?sub ", path, " ", (*p.shape.hasValue).String(), " } .")
-
-		bodyParts = append(bodyParts, out)
-	}
-
-	if p.minCount > 0 {
-		universalOnly = false
-		// tmp := fmt.Sprint("( ", p.minCount, " <= COUNT(DISTINCT ?InnerObj", num, ") )")
-
-		tmp := HavingClause{
-			min:      true,
-			numeral:  p.minCount,
-			variable: fmt.Sprint("?InnerObj", num),
-			path:     path,
-		}
-		having = append(having, tmp)
-	}
-
-	for i := range p.shape.qualifiedShapes {
-		if p.shape.qualifiedShapes[i].min != 0 {
-			universalOnly = false
-		}
-	}
-
-	// UNIVERSAL
+	// NON-LOGICAL CONSTRAINTS
 
 	for i := range p.shape.valuetypes {
 		bodyParts = append(bodyParts, p.shape.valuetypes[i].SparqlBody(objName, path))
@@ -99,6 +68,9 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 	for i := range p.shape.propairconts {
 		bodyParts = append(bodyParts, p.shape.propairconts[i].SparqlBody(objName, path))
 	}
+	for i := range p.shape.others {
+		bodyParts = append(bodyParts, p.shape.others[i].SparqlBody(objName, path))
+	}
 
 	//
 	// leave out property inclusion here, would require more thoughts on dependency passing
@@ -108,59 +80,58 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 	// the header of their child pshapes 4) ... 5) profit
 	//
 
-	if len(p.shape.in) > 0 {
-		var inList []string
-		uniqObj := objName + "IN" + strconv.Itoa(len(p.shape.in))
+	// Numerical Constraints
 
-		for i := range p.shape.in {
-			inList = append(inList, p.shape.in[i].String())
-		}
+	if p.minCount > 0 {
+		// tmp := fmt.Sprint("( ", p.minCount, " <= COUNT(DISTINCT ?InnerObj", num, ") )")
 
-		inner := fmt.Sprint("FILTER ( ", uniqObj, " NOT IN (", strings.Join(inList, " "), ") ) .")
-		out := fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+		subquery.min = true
+		subquery.numMin = p.minCount
+		subquery.path = path
+		subquery.id = num
 
-		bodyParts = append(bodyParts, out)
-
+		// tmp := CountingSubQuery{
+		// 	min:      true,
+		// 	max: 		false
+		// 	numeral:  p.minCount,
+		// 	variable: fmt.Sprint("?InnerObj", num),
+		// 	path:     path,
+		// }
+		// subquery = append(subquery, tmp)
 	}
 
-	if p.maxCount != 0 {
-		// universalOnly = false
-		// tmp := fmt.Sprint("(", p.maxCount, " >= COUNT(DISTINCT ?InnerObj", num, ") )")
+	if p.maxCount != -1 {
 
-		tmp := HavingClause{
-			min:      false,
-			numeral:  p.maxCount,
-			variable: fmt.Sprint("?InnerObj", num),
-			path:     path,
-		}
-		having = append(having, tmp)
+		subquery.max = true
+		subquery.numMax = p.maxCount
+		subquery.path = path
+		subquery.id = num
+
+		// // universalOnly = false
+		// // tmp := fmt.Sprint("(", p.maxCount, " >= COUNT(DISTINCT ?InnerObj", num, ") )")
+
+		// tmp := CountingSubQuery{
+		// 	min:      false,
+		// 	numeral:  p.maxCount,
+		// 	variable: fmt.Sprint("?InnerObj", num),
+		// 	path:     path,
+		// }
+		// subquery = append(subquery, tmp)
 	}
 
-	// TODO: closed, ignoredProperties, severity, message, and deactivated (not dealt here?)
+	// TODO: severity, message (not dealt here?)
 
 	var sb strings.Builder
 
-	// add the headers nedded in outer query
-
-	// head = append(head, fmt.Sprint("(COUNT(DISTINCT ?InnerObj", num, ") AS ?countObj", num, ")"))
-	// head = append(head, fmt.Sprint("(GROUP_CONCAT(DISTINCT ?InnerObj", num, ") AS ?listObjs", num, ")"))
-
-	// most important thing: The path expression
-
 	// if output && universalOnly {
-	if universalOnly {
+	if p.universalOnly {
 		sb.WriteString("OPTIONAL { \n")
 	}
 	sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
 
-	if universalOnly {
+	if p.universalOnly {
 		sb.WriteString("} \n")
 	}
-	// } else {
-	// 	if !universalOnly {
-	// 		sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
-	// 	}
-	// }
 
 	// inner body parts
 	for i := range bodyParts {
@@ -168,17 +139,9 @@ func (p PropertyShape) ToSubquery(num int) (head []string, body string, having [
 		sb.WriteString("\n\t")
 	}
 
-	// {  # For every predicate expression with
-	//   SELECT ?InnerSub (COUNT(DISTINCT ?InnerObj) AS ?countObj) (GROUP_CONCAT(DISTINCT ?InnerObj) AS ?listObjs)
-	//   WHERE {
-	//   	?InnerSub<path>?InnerObj
-	//   }
-	//   GROUP BY ?InnerSub
-	// }
-
 	body = sb.String()
 
-	return head, body, having
+	return head, body, subquery
 }
 
 func GetFlatMinExpression(num, flatNum, minCount int, path string) (bodyParts []string) {
@@ -210,9 +173,9 @@ func GetFlatMinExpression(num, flatNum, minCount int, path string) (bodyParts []
 }
 
 // ToSubqueryFlat produces a flattened version of the query, eschewing the use of aggregation
-func (p PropertyShape) ToSubqueryFlat(num int, output bool) (body string) {
+func (p *PropertyShape) ToSubqueryFlat(num int, output bool) (body string) {
 	flatNum := 1
-	universalOnly := true
+
 	countingCase := false
 	// referentialConsPresent := false
 
@@ -220,38 +183,8 @@ func (p PropertyShape) ToSubqueryFlat(num int, output bool) (body string) {
 	path := p.path.PropertyString()
 
 	var bodyParts []string
-	// var OuterBodyParts []string // to be used to for correlation and min/max counts
-
-	// initial := fmt.Sprint("FILTER (!BOUND(?InnerSub", num, ")  || ?InnerSub", num, "  = ?sub) .")
-	// OuterBodyParts = append(OuterBodyParts, initial)
-
-	// EXISTENTIAL { hasValue, minCount, qualifiedMinCount}
-
-	if p.shape.hasValue != nil {
-		universalOnly = false
-		out := fmt.Sprint("FILTER EXISTS { ?sub ", path, " ", (*p.shape.hasValue).String(), " } .")
-
-		bodyParts = append(bodyParts, out)
-	}
-
-	if p.minCount > 0 {
-		universalOnly = false
-		countingCase = true
-
-		if p.minCount > 1 {
-			bodyParts = append(bodyParts, GetFlatMinExpression(num, flatNum, p.minCount, path)...)
-		}
-
-	}
-
-	for i := range p.shape.qualifiedShapes {
-		if p.shape.qualifiedShapes[i].min != 0 {
-			universalOnly = false
-		}
-	}
 
 	// UNIVERSAL
-
 	for i := range p.shape.valuetypes {
 		bodyParts = append(bodyParts, p.shape.valuetypes[i].SparqlBody(objName, path))
 	}
@@ -264,6 +197,9 @@ func (p PropertyShape) ToSubqueryFlat(num int, output bool) (body string) {
 	for i := range p.shape.propairconts {
 		bodyParts = append(bodyParts, p.shape.propairconts[i].SparqlBody(objName, path))
 	}
+	for i := range p.shape.others {
+		bodyParts = append(bodyParts, p.shape.others[i].SparqlBody(objName, path))
+	}
 
 	//
 	// leave out property inclusion here, would require more thoughts on dependency passing
@@ -273,22 +209,16 @@ func (p PropertyShape) ToSubqueryFlat(num int, output bool) (body string) {
 	// the header of their child pshapes 4) ... 5) profit
 	//
 
-	if len(p.shape.in) > 0 {
-		var inList []string
-		uniqObj := objName + "IN" + strconv.Itoa(len(p.shape.in))
+	if p.minCount > 0 {
+		countingCase = true
 
-		for i := range p.shape.in {
-			inList = append(inList, p.shape.in[i].String())
+		if p.minCount > 1 {
+			bodyParts = append(bodyParts, GetFlatMinExpression(num, flatNum, p.minCount, path)...)
 		}
-
-		inner := fmt.Sprint("FILTER ( ", uniqObj, " NOT IN (", strings.Join(inList, " "), ") ) .")
-		out := fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
-
-		bodyParts = append(bodyParts, out)
 
 	}
 
-	if p.maxCount != 0 {
+	if p.maxCount != -1 {
 		// tmp := fmt.Sprint("(", p.maxCount, " >= COUNT(DISTINCT ?InnerObj", num, ") )")
 
 		// tmp := HavingClause{
@@ -320,17 +250,17 @@ func (p PropertyShape) ToSubqueryFlat(num int, output bool) (body string) {
 	// most important thing: The path expression
 
 	if !countingCase {
-		if output && universalOnly {
-			if universalOnly {
+		if output && p.universalOnly {
+			if p.universalOnly {
 				sb.WriteString("OPTIONAL { \n")
 			}
 			sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
 
-			if universalOnly {
+			if p.universalOnly {
 				sb.WriteString("} \n")
 			}
 		} else {
-			if !universalOnly {
+			if !p.universalOnly {
 				sb.WriteString(fmt.Sprint("?sub", " ", p.path.PropertyString(), " ?InnerObj", num, " .\n\t"))
 			}
 		}
@@ -342,14 +272,6 @@ func (p PropertyShape) ToSubqueryFlat(num int, output bool) (body string) {
 		sb.WriteString("\n\t")
 	}
 
-	// {  # For every predicate expression with
-	//   SELECT ?InnerSub (COUNT(DISTINCT ?InnerObj) AS ?countObj) (GROUP_CONCAT(DISTINCT ?InnerObj) AS ?listObjs)
-	//   WHERE {
-	//   	?InnerSub<path>?InnerObj
-	//   }
-	//   GROUP BY ?InnerSub
-	// }
-
 	body = sb.String()
 
 	return body
@@ -360,345 +282,116 @@ func (p PropertyShape) ToSubqueryFlat(num int, output bool) (body string) {
 // other nodes expressiong a conditional shape dependency such that any
 // potential node is only satisfied if and only if the conditional nodes have
 // or do not have the specified shapes.
-func (n NodeShape) ToSparql(target SparqlQueryFlat) (out SparqlQuery) {
+func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out SparqlQuery) {
 	var head []string // variables and renamings appearing inside the SELECT statement
 	var body []string // statements that form the inside of the WHERE clause
-	var group []string
-	var having []HavingClause
+	// var group []string
+	var subqueries []CountingSubQuery
 
 	// var usedPaths []string // keep track of all (non-inverse) path constraints
 
-	head = append(head, "(?sub as ?"+removeAbbr(n.IRI.RawValue())+" )")
+	head = append(head, "(?sub as ?"+n.GetQualName()+" )")
 	// vars = append(vars, "?sub")
-	group = append(group, "?sub")
+	// group = append(group, "?sub")
 
 	// initial := "{?sub ?pred ?obj. }\n\tUNION\n\t{?objI ?predI ?sub.}"
 	// body = append(body, initial)
+	targetLine := fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}")
 
-	body = append(body, fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}"))
-
-	if n.hasValue != nil {
-		out := fmt.Sprint("FILTER ( ?sub = ", (*n.hasValue).String(), " ) .")
-
-		body = append(body, out)
-	}
+	body = append(body, targetLine)
 
 	// UNIVERSAL
 
 	for i := range n.valuetypes {
-		body = append(body, n.valuetypes[i].SparqlBody("sub", ""))
+		body = append(body, n.valuetypes[i].SparqlBody("?sub", ""))
 	}
 	for i := range n.valueranges {
-		body = append(body, n.valueranges[i].SparqlBody("sub", ""))
+		body = append(body, n.valueranges[i].SparqlBody("?sub", ""))
 	}
 	for i := range n.stringconts {
-		body = append(body, n.stringconts[i].SparqlBody("sub", ""))
+		body = append(body, n.stringconts[i].SparqlBody("?sub", ""))
 	}
+	for i := range n.others {
+		body = append(body, n.others[i].SparqlBody("?sub", ""))
+	}
+	for i := range n.propairconts {
+		body = append(body, n.propairconts[i].SparqlBody("?sub", ""))
+	}
+
 	// leaving out property pair constraints; cannot appear inside node shape
 
 	for i, p := range n.properties {
 		// headP, bodyP, havingP := p.ToSubquery(i, len(p.shape.deps) > 0)
-		headP, bodyP, havingP := p.ToSubquery(i)
+		headP, bodyP, subquery := p.ToSubquery(i)
 
 		head = append(head, headP...)
 		body = append(body, bodyP)
-		having = append(having, havingP...)
+
+		if subquery != nil {
+
+			subquery.target = targetLine
+			subqueries = append(subqueries, *subquery)
+		}
 
 		// fmt.Println("The body atom for property: ", p.shape.IRI)
 		// fmt.Println(p.ToSubquery(i))
 		if len(p.shape.deps) > 0 { // add needed projections to later check dependencies
-			nameOfRef := p.GetIRI()
+			nameOfRef := p.GetQualName()
 
-			head = append(head, fmt.Sprint("( GROUP_CONCAT(DISTINCT ?InnerObj", i, "; separator=' ') AS ?", nameOfRef, " )"))
+			// head = append(head, fmt.Sprint("( GROUP_CONCAT(DISTINCT ?InnerObj", i, "; separator=' ') AS ?", nameOfRef, " )"))
+			head = append(head, fmt.Sprint("( ?InnerObj", i, " AS ?", nameOfRef, "group )"))
 		}
 
 	}
 
-	// TODO: closed, ignoredProperties, severity, message
-	// // Building the line for closedness condition
-	// if n.closed {
-	// 	sb.WriteString("FILTER NOT EXISTS {?sub ?pred ?objClose FILTER ( ?pred NOT IN (")
-	// 	sb.WriteString(strings.Join(usedPaths, ", "))
-	// 	sb.WriteString(" )) }\n\n")
-	// }
-
 	out.head = head
 	out.body = body
-	out.group = group
-	out.having = having
+	// out.group = group
+	out.subqueries = subqueries
+	out.graph = fromGraph
 
 	return out
 }
 
-// ToSparqlFlat writes a flattened version of the SparqlQuery, which eschews the use of aggregation
-func (n NodeShape) ToSparqlFlat(target SparqlQueryFlat) (out SparqlQueryFlat) {
-	var head string   // variables and renamings appearing inside the SELECT statement
-	var body []string // statements that form the inside of the WHERE clause
+// // ToSparqlFlat writes a flattened version of the SparqlQuery, which eschews the use of aggregation
+// func (n *NodeShape) ToSparqlFlat(target SparqlQueryFlat) (out SparqlQueryFlat) {
+// 	var head string   // variables and renamings appearing inside the SELECT statement
+// 	var body []string // statements that form the inside of the WHERE clause
 
-	// var usedPaths []string // keep track of all (non-inverse) path constraints
+// 	// var usedPaths []string // keep track of all (non-inverse) path constraints
 
-	head = target.head
-	// initial := "{?sub ?pred ?obj. }\n\tUNION\n\t{?objI ?predI ?sub.}"
-	// body = append(body, initial)
+// 	head = target.head
+// 	// initial := "{?sub ?pred ?obj. }\n\tUNION\n\t{?objI ?predI ?sub.}"
+// 	// body = append(body, initial)
 
-	body = append(body, fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}"))
+// 	body = append(body, fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}"))
 
-	if n.hasValue != nil {
-		out := fmt.Sprint("FILTER ( ?sub = ", (*n.hasValue).String(), " ) .")
+// 	// UNIVERSAL
 
-		body = append(body, out)
-	}
+// 	for i := range n.valuetypes {
+// 		body = append(body, n.valuetypes[i].SparqlBody("?sub", ""))
+// 	}
+// 	for i := range n.valueranges {
+// 		body = append(body, n.valueranges[i].SparqlBody("?sub", ""))
+// 	}
+// 	for i := range n.stringconts {
+// 		body = append(body, n.stringconts[i].SparqlBody("?sub", ""))
+// 	}
+// 	for i := range n.others {
+// 		body = append(body, n.others[i].SparqlBody("?sub", ""))
+// 	}
+// 	// leaving out property pair constraints; cannot appear inside node shape
 
-	// UNIVERSAL
+// 	for i, p := range n.properties {
+// 		bodyP := p.ToSubqueryFlat(i, false)
 
-	for i := range n.valuetypes {
-		body = append(body, n.valuetypes[i].SparqlBody("sub", ""))
-	}
-	for i := range n.valueranges {
-		body = append(body, n.valueranges[i].SparqlBody("sub", ""))
-	}
-	for i := range n.stringconts {
-		body = append(body, n.stringconts[i].SparqlBody("sub", ""))
-	}
-	// leaving out property pair constraints; cannot appear inside node shape
+// 		body = append(body, bodyP)
+// 	}
 
-	for i, p := range n.properties {
-		bodyP := p.ToSubqueryFlat(i, false)
+// 	// TODO:  severity, message
 
-		body = append(body, bodyP)
-	}
+// 	out.head = head
+// 	out.body = body
 
-	// TODO: closed, ignoredProperties, severity, message
-	// // Building the line for closedness condition
-	// if n.closed {
-	// 	sb.WriteString("FILTER NOT EXISTS {?sub ?pred ?objClose FILTER ( ?pred NOT IN (")
-	// 	sb.WriteString(strings.Join(usedPaths, ", "))
-	// 	sb.WriteString(" )) }\n\n")
-	// }
-
-	out.head = head
-	out.body = body
-
-	return out
-}
-
-// WitnessQuery returns a Sparql query that produces for a given list of nodes
-// a witness query, which either shows why a given node satisfies or does not satisfy the
-// query that is output in the method ToSparql()
-func (n NodeShape) WitnessQuery(nodes []string) (out string) {
-	return out
-
-	// var sb strings.Builder
-
-	// // Initial part
-	// sb.WriteString("SELECT distinct (?sub as ?" + "Witness_of_" + n.name[len(_sh):] + " )")
-
-	// // for each property constraint with recursive refs
-	// var outputAttributes []string
-
-	// // one for each property constraint and other constraints
-	// var outputWhereStatements []string = []string{"{?sub ?pred ?obj.}\nUNION\n{?obj ?pred ?sub .}\n"}
-
-	// var usedPaths []string // keep track of all (non-inverse) path constraints
-	// usedPaths = append(usedPaths, res(_rdf+"type").String())
-
-	// rN := 1 // running number, used to make the vars distinct
-
-	// // limt to given list of nodes
-	// out := fmt.Sprint("FILTER (?sub IN (", strings.Join(nodes, ", "), "))\n")
-	// outputWhereStatements = append(outputWhereStatements, out)
-
-	// for _, p := range n.properties {
-
-	// 	var innerOutputAttributes []string
-	// 	var innerWhereStatements []string
-
-	// 	// check if counting constraints present or not
-	// 	var tb strings.Builder
-	// 	var tb2 strings.Builder
-
-	// 	o := fmt.Sprint("OPTIONAL {\n \t{\n\t\tSELECT (?sub AS ?subcorrel", rN,
-	// 		" ) ?obj", rN, " ")
-	// 	tb.WriteString(o)
-
-	// 	if p.inverse {
-	// 		tb2.WriteString(fmt.Sprint("?obj", rN, " ", p.path.String(), " ?sub .\n\t"))
-
-	// 		if p.minCount != 0 || p.maxCount != 0 {
-	// 			tb2.WriteString("{\n\t")
-	// 			tb2.WriteString(fmt.Sprint("SELECT ?InnerPred", rN, " ?InnerObj", rN))
-	// 			tb2.WriteString(fmt.Sprint(" (COUNT (DISTINCT ?InnerSub", rN, ") AS ?countObj", rN, ")"))
-	// 			tb2.WriteString(fmt.Sprint(" (GROUP_CONCAT (DISTINCT ?InnerSub", rN, ") AS ?listObjs", rN, ")\n\t"))
-	// 			tb2.WriteString("WHERE {\n\t")
-	// 			tb2.WriteString(fmt.Sprint("?InnerSub", rN, " ", p.path.String(), " ?InnerObj", rN, " .\n\t"))
-	// 			tb2.WriteString("}\n\t")
-	// 			tb2.WriteString(fmt.Sprint("GROUP BY ?InnerPred", rN, " ?InnerObj", rN, "\n\t"))
-	// 			tb2.WriteString("}\n\t")
-	// 			tb2.WriteString(fmt.Sprint("FILTER (?InnerObj", rN, " = ?sub)\n"))
-	// 		}
-
-	// 	} else {
-	// 		tb2.WriteString(fmt.Sprint("?sub ", p.path.String(), " ?obj", rN, " .\n\t"))
-
-	// 		if p.minCount != 0 || p.maxCount != 0 {
-	// 			tb2.WriteString("{\n\t")
-	// 			tb2.WriteString(fmt.Sprint("SELECT ?InnerSub", rN, " ?InnerPred", rN))
-	// 			tb2.WriteString(fmt.Sprint(" (COUNT (DISTINCT ?InnerObj", rN, ") AS ?countObj", rN, ")"))
-	// 			tb2.WriteString(fmt.Sprint(" (GROUP_CONCAT (DISTINCT ?InnerObj", rN, ") AS ?listObjs", rN, ")\n\t"))
-	// 			tb2.WriteString("WHERE {\n\t")
-	// 			tb2.WriteString(fmt.Sprint("?InnerSub", rN, " ", p.path.String(), " ?InnerObj", rN, " .\n\t"))
-	// 			tb2.WriteString("}\n\t")
-	// 			tb2.WriteString(fmt.Sprint("GROUP BY ?InnerSub", rN, " ?InnerPred", rN, "\n\t"))
-	// 			tb2.WriteString("}\n\t")
-	// 			tb2.WriteString(fmt.Sprint("FILTER (?InnerSub", rN, " = ?sub)\n"))
-
-	// 		}
-	// 		usedPaths = append(usedPaths, p.path.String()) // adding to list of encountered
-	// 	}
-	// 	innerWhereStatements = append(innerWhereStatements, tb2.String())
-
-	// 	var pathOutputs []string
-
-	// 	pathOutputs = append(pathOutputs, fmt.Sprint("(", p.path.String(), " AS ?", "path", rN, " )"))
-	// 	// pathOutputs = append(pathOutputs, fmt.Sprint("( ?obj", rN, " AS ?", "obj", rN, " )"))
-
-	// 	// innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("(?obj", rN, " AS ?ValueWitness,", rN, ")"))
-
-	// 	if p.minCount != 0 || p.maxCount != 0 {
-	// 		var o string
-	// 		if p.maxCount != 0 {
-	// 			o = fmt.Sprint("COALESCE(",
-	// 				" IF(?countObj", rN, " < ", p.minCount, ", 1/0, ",
-	// 				" IF(?countObj", rN, " > ", p.maxCount, ", 1/0, \"Object count matches constraint\" ))",
-	// 				",\"Violation: Object count for path", rN, " not matching requirement.\")")
-	// 		} else {
-	// 			o = fmt.Sprint("COALESCE(",
-	// 				" IF(?countObj", rN, " < ", p.minCount, ", 1/0, \"Object count matches constraint\" )",
-	// 				",\"Violation: Object count for path", rN, " not matching requirement.\")")
-	// 		}
-	// 		// pathOutputs = append(pathOutputs, o)
-	// 		pathOutputs = append(pathOutputs, fmt.Sprint("(", o, " AS ?CountWitness", rN, " ) "))
-
-	// 		pathOutputs = append(pathOutputs, fmt.Sprint("( ?listObjs", rN, " AS ?listWitness", rN, " ) "))
-	// 		innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("?countObj", rN, " "))
-	// 		innerOutputAttributes = append(innerOutputAttributes, fmt.Sprint("?listObjs", rN, " "))
-	// 	}
-	// 	if p.class != nil {
-
-	// 		pathOutputs = append(pathOutputs, fmt.Sprint("( COALESCE(?obj", rN,
-	// 			", \"No ", p.path, "-connected node of class ", p.class.String(), "\") AS ?ClassWitness", rN, " ) "))
-	// 		out := fmt.Sprint("?obj", rN, " rdf:type/rdfs:subClassOf* ", p.class.String(), " .\n")
-	// 		innerWhereStatements = append(innerWhereStatements, out)
-	// 	}
-	// 	if p.hasValue != nil {
-
-	// 		pathOutputs = append(pathOutputs, fmt.Sprint("( COALESCE(?obj", rN, ", \"Violation: No ",
-	// 			p.path, "-connected node of value ", p.hasValue.String(), "\") AS ?ClassWitness", rN, " ) "))
-	// 		out := fmt.Sprint("FILTER ( ?obj", rN, " = ", p.hasValue.String(), " )\n")
-	// 		innerWhereStatements = append(innerWhereStatements, out)
-	// 	}
-
-	// 	outputAttributes = append(outputAttributes, pathOutputs...)
-
-	// 	// outputWhereStatements = append(outputWhereStatements, tb.String())
-
-	// 	tb.WriteString(strings.Join(innerOutputAttributes, " "))
-	// 	tb.WriteString(" WHERE {\n\t")
-	// 	tb.WriteString(strings.Join(innerWhereStatements, "\n\t"))
-	// 	tb.WriteString(fmt.Sprint("\t}\n}\n FILTER(?subcorrel", rN, " = ?sub)\n}"))
-
-	// 	outputWhereStatements = append(outputWhereStatements, tb.String())
-
-	// 	rN++
-	// }
-
-	// // Building the line for closedness condition
-	// if n.closed {
-	// 	var tb strings.Builder
-
-	// 	tb.WriteString("OPTIONAL { { SELECT (?sub AS ?subcorrel) (?pred AS ?closednessWitness) " +
-	// 		"WHERE { ?sub ?pred ?obj2.  FILTER ( ?pred NOT IN (")
-	// 	tb.WriteString(strings.Join(usedPaths, ", "))
-	// 	tb.WriteString(" )) } } FILTER(?subcorrel = ?sub) } \n\n")
-
-	// 	outputWhereStatements = append(outputWhereStatements, tb.String())
-	// 	o := "(COALESCE(?closednessWitness,\"Closed constraint satisifed.\") as ?clos) "
-	// 	outputAttributes = append(outputAttributes, o)
-	// }
-
-	// // buildling the SELECT line
-	// for _, a := range outputAttributes {
-	// 	sb.WriteString(" " + a)
-	// }
-	// sb.WriteString("{ \n")
-
-	// // building the inside of the WHERE
-	// for _, w := range outputWhereStatements {
-	// 	sb.WriteString(w)
-	// 	sb.WriteString("\n")
-	// }
-
-	// sb.WriteString("}\n")
-	// return sb.String()
-}
-
-// FindWitnessQueryFailures returns for a given list of nodes, a list of explanations
-// why they fail validation against the shape, and a boolean whether there is at least one node
-// which does seem to satisfy the witness query
-func (s ShaclDocument) FindWitnessQueryFailures(shape string, nodes []string, ep endpoint) ([]string, bool) {
-	return []string{}, false
-
-	// // if !s.validated {
-	// // 	log.Panicln("Cannot call FindWitnessQueryFailures before validation")
-	// // }
-
-	// query := s.shapeNames[shape].WitnessQuery(nodes)
-	// witTable := ep.Query(query)
-
-	// var nodeMap map[string]*struct{} = make(map[string]*struct{})
-
-	// for i := range nodes {
-	// 	nodeMap[nodes[i]] = nil
-	// }
-
-	// // check  if we got a result for every node
-	// if len(witTable.content) != len(nodes) {
-	// 	log.Panicln("Witness query did not return a line for every checked node: ",
-	// 		len(witTable.content), " instead of ", len(nodes))
-	// }
-
-	// var answers []string
-	// metAll := false // indicates that there is a node that does meet all constraints
-
-	// for i := range witTable.content {
-	// 	node := witTable.content[i][0].String()
-	// 	_, ok := nodeMap[node]
-	// 	if !ok {
-	// 		log.Panicln("Found a non-matching node in witness result ",
-	// 			"node: ", node, " list of nodes: ", nodes)
-	// 	}
-	// 	violationFound := false
-
-	// 	var violations []string
-
-	// 	// look for violations in other columns
-
-	// 	for j := range witTable.content[i][1:] {
-	// 		text := witTable.content[i][j].RawValue()
-
-	// 		if strings.HasPrefix(text, "Violation") {
-	// 			violationFound = true
-	// 			violations = append(violations, text)
-	// 		}
-	// 	}
-	// 	if !violationFound {
-	// 		metAll = true
-	// 	} else {
-	// 		answers = append(answers, fmt.Sprint("For node ", node, ": ",
-	// 			strings.Join(violations, "; "), "."))
-	// 	}
-
-	// }
-
-	// return answers, metAll
-}
+// 	return out
+// }

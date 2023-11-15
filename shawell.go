@@ -9,12 +9,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"regexp"
 	"strings"
 
-	rdf "github.com/deiu/rdf2go"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 )
+
+var theCount int64 // lord of all things counting
+
+func getCount() int64 {
+	theCount++
+	return theCount
+}
 
 func check(e error) {
 	if e != nil {
@@ -33,6 +41,7 @@ var (
 	_sh   = "http://www.w3.org/ns/shacl#"
 	_rdf  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 	_rdfs = "http://www.w3.org/2000/01/rdf-schema#"
+	_xsd  = "http://www.w3.org/2001/XMLSchema#"
 )
 
 func GetNameSpace(file *os.File) {
@@ -76,12 +85,17 @@ func GetNameSpace(file *os.File) {
 
 func abbr(in string) string {
 	for k, v := range prefixes {
+		in = strings.ReplaceAll(in, " > ", "🐭️")
+		in = strings.ReplaceAll(in, " < ", "🧀️")
 		in = strings.ReplaceAll(in, ">=", "🤔️")
 		in = strings.ReplaceAll(in, "<=", "😀️")
+		in = strings.ReplaceAll(in, "_:", "")
 		in = strings.ReplaceAll(in, ">", "")
 		in = strings.ReplaceAll(in, "<", "")
 		in = strings.ReplaceAll(in, "🤔️", ">=")
 		in = strings.ReplaceAll(in, "😀️", "<=")
+		in = strings.ReplaceAll(in, "🐭️", " > ")
+		in = strings.ReplaceAll(in, "🧀️", " < ")
 		in = strings.ReplaceAll(in, v, k)
 	}
 
@@ -133,6 +147,8 @@ var ResA = res(_rdf + "type")
 //      - sh:and  & sh:not support
 //      - sh:targetClass & sh:targetObjectOf support
 // * support more of basic SHACL
+//   - sh:ignoredProperties (for sh:closed)
+//   - sh:closed
 //   - (if it comes in tests) explicit property shapes
 //   - sh:name
 //   - sh:datatype
@@ -174,9 +190,6 @@ var ResA = res(_rdf + "type")
 //     to the user.
 
 // LOW PRIORITY TODO:
-// * support more of basic SHACL
-//   - sh:ignoredProperties (for sh:closed)
-//   - sh:closed
 //  * Produce proper validation reports in RDF
 //   - support severity
 //   - result message
@@ -224,8 +237,11 @@ func main() {
 	check(err)
 
 	g2 := rdf.NewGraph(_sh)
+
 	err = g2.Parse(shaclDoc, "text/turtle")
 	check(err)
+
+	// fmt.Println("Parsed Graph: ", g2)
 
 	endpoint := GetSparqlEndpoint(
 		*endpointAddress,
@@ -234,18 +250,29 @@ func main() {
 		*password,
 		*debug,
 		usingUpdateEndpoint,
-		g2.String(),
+		"",
 	)
 
 	GetNameSpace(shaclDoc)
 
+	var VR *ValidationReport
+
+	var graphName string
+
 	// check if data needs to be inserted into Endpoint
 	if *dataIncluded {
-		res := endpoint.Insert(g2)
+
+		VR, err = ExtractValidationReport(g2)
+		check(err)
+
+		// fmt.Println("Extracted VR\n", VR)
+
+		res := endpoint.Insert(g2, VR.testName.String())
 		check(res)
+		graphName = VR.testName.String()
 	}
 
-	var parsedDoc ShaclDocument = GetShaclDocument(g2)
+	var parsedDoc ShaclDocument = GetShaclDocument(g2, graphName, endpoint)
 	fmt.Println("The parsed Shacl Doc", parsedDoc.String())
 
 	parsedDoc.AllCondAnswers(endpoint)
@@ -255,25 +282,24 @@ func main() {
 	// 	fmt.Println(v.Limit(5))
 	// }
 
-	lp := parsedDoc.GetAllLPs()
-	// fmt.Println("Get LP for document: ", lp)
-
 	var res bool
-	var invalidTargets map[string]Table
+	// var invalidTargets map[string]Table
 
 	if parsedDoc.IsRecursive() {
 		fmt.Println("Recursive document parsed, tranforming to LP and sending off to DLV.")
 
+		lp := parsedDoc.GetAllLPs()
+		// fmt.Println("Get LP for document: ", lp)
 		lpTables := lp.Answer()
 
 		// fmt.Println("Answer from DLV: ")
 		// for i := range lpTables {
 		// 	fmt.Println(lpTables[i].Limit(5))
 		// }
-		res, invalidTargets = parsedDoc.ValidateLP(lpTables, endpoint)
+		res, _ = parsedDoc.ValidateLP(lpTables, endpoint)
 
 	} else {
-		res, invalidTargets = parsedDoc.Validate(endpoint)
+		res, _ = parsedDoc.Validate(endpoint)
 	}
 
 	fmt.Println("----------------------------------")
@@ -281,7 +307,69 @@ func main() {
 	fmt.Println("Shacl Document valid: ", res)
 	fmt.Println("----------------------------------")
 
-	for k, v := range invalidTargets {
-		fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(100))
+	// Producing a Validation Repot in case of failure
+
+	if VR != nil {
+		// fmt.Println("ValidationResult in XML form: ")
+
+		var reports []ValidationResult
+
+		allValid := true
+
+		for _, v := range parsedDoc.shapeNames {
+			// var reportsFromShape []ValidationResult
+
+			switch t := v.(type) {
+			case *NodeShape:
+				if t.deactivated {
+					continue
+				}
+				valid, reportsFromShape := parsedDoc.GetValidationReport(t, endpoint)
+				if !valid {
+					allValid = false
+				}
+				if !valid && len(reportsFromShape) == 0 {
+					log.Panic("Reporting not valid for NodeSHape ", t.IRI, " but no reports returned!")
+				}
+
+				reports = append(reports, reportsFromShape...)
+			case *PropertyShape:
+				if t.shape.deactivated {
+					continue
+				}
+				valid, reportsFromShape := parsedDoc.GetValidationReportProperty(t, endpoint, &[]TargetExpression{}, "")
+				if !valid {
+					allValid = false
+				}
+
+				if !valid && len(reportsFromShape) == 0 {
+					log.Panic("Reporting not valid for PropertyShape ", t.name, " but no reports returned!")
+				}
+
+				reports = append(reports, reportsFromShape...)
+			}
+		}
+
+		VR.results = reports
+		VR.result = res
+
+		if allValid != res {
+
+			fmt.Println("Number of reports: ", len(reports))
+
+			fmt.Println("VALIDATION REPORT: \n", VR)
+			log.Panicln("Reported shacl as Invalid, but no ValidationResult produced! ", allValid, res)
+		}
+
+		fmt.Println("VALIDATION REPORT: \n", VR)
 	}
+
+	// // Clean up the named graph afterwards
+	// if *dataIncluded {
+	// 	endpoint.ClearGraph(VR.testName.String())
+	// }
+
+	// for k, v := range invalidTargets {
+	// 	fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(100))
+	// }
 }

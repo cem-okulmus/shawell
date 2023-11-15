@@ -25,36 +25,85 @@ import (
 
 // func (w WhereStatement) Body(a int) string { return w.content }
 
-type HavingClause struct {
-	min      bool // false if min, true if max
-	numeral  int
-	variable string // the variable being restricted
-	path     string // the path over with the var was reached
+// type HavingClause struct {
+// 	min      bool // false if min, true if max
+// 	numeral  int
+// 	variable string // the variable being restricted
+// 	path     string // the path over with the var was reached
+// }
+
+// func (h HavingClause) String() string {
+// 	var order string
+// 	if h.min {
+// 		order = "<="
+// 	} else {
+// 		order = ">="
+// 	}
+
+// 	return fmt.Sprint("(", h.numeral, " ", order, " COUNT(DISTINCT ", h.variable, ") )")
+// }
+
+type CountingSubQuery struct {
+	graph  string
+	target string
+	id     int
+	min    bool
+	max    bool
+	numMin int
+	numMax int
+	path   string
 }
 
-func (h HavingClause) String() string {
-	var order string
-	if h.min {
-		order = "<="
-	} else {
-		order = ">="
-	}
+func (c CountingSubQuery) ProduceBody() string {
+	var sb strings.Builder
 
-	return fmt.Sprint("(", h.numeral, " ", order, " COUNT(DISTINCT ", h.variable, ") )")
+	head := []string{"?sub", fmt.Sprint("( COUNT(?obj) AS ?count", c.id, ")")}
+	core := "OPTIONAL {\n\t" + fmt.Sprint("?sub ", c.path, " ?obj. ") + "\n\t}"
+	body := []string{c.target, core}
+	group := []string{"?sub"}
+
+	sb.WriteString("{\n")
+	sb.WriteString("SELECT  ")
+	sb.WriteString(strings.Join(head, " "))
+	sb.WriteString(" { \n\t")
+	if c.graph != "" {
+		sb.WriteString(" GRAPH " + c.graph + " ")
+	}
+	sb.WriteString(strings.Join(body, "\n\t"))
+
+	sb.WriteString("} \n")
+	if len(group) > 0 {
+		sb.WriteString("GROUP BY ")
+		sb.WriteString(strings.Join(group, " "))
+	}
+	sb.WriteString("\n} ")
+
+	var inner []string
+	if c.min {
+		inner = append(inner, fmt.Sprint("?count", c.id, " >= ", c.numMin))
+	}
+	if c.max {
+		inner = append(inner, fmt.Sprint("?count", c.id, " <= ", c.numMax))
+	}
+	sb.WriteString(fmt.Sprint("FILTER (", strings.Join(inner, " && "), ") . "))
+
+	return sb.String()
 }
 
 type SparqlQuery struct {
-	head   []string
-	body   []string // positive expressions that check for existance of some objects
-	group  []string
-	having []HavingClause
+	head       []string
+	body       []string // positive expressions that check for existance of some objects
+	group      []string
+	graph      string // if non-empty, then we query terms inside this named graph only
+	subqueries []CountingSubQuery
 }
 
 // SparqlQueryFlat is used for the target restrictions, these need to be "flat"; meaning no form
 // of aggregation is allowed, this is achieved by rewritten non-flattened SparqlQueries
 type SparqlQueryFlat struct {
-	head string   // only a single attribute in the head
-	body []string // positive expressions that check for existance of some objects
+	head  string   // only a single attribute in the head
+	body  []string // positive expressions that check for existance of some objects
+	graph string   // if non-empty, then we query terms inside this named graph only
 }
 
 func (s SparqlQuery) String() string {
@@ -108,83 +157,6 @@ func (s SparqlQueryFlat) ProjectToVar(variable string, external bool) (out Sparq
 	return out
 }
 
-// func MergeGeneral(this, other *SparqlQueryFlat) (out *SparqlQueryFlat) {
-// 	if this == nil {
-// 		if other == nil {
-// 			log.Panicln("Cannot merge two nil queries")
-// 		}
-// 		return other
-// 	} else {
-// 		if other == nil {
-// 			return this
-// 		}
-// 	}
-// 	tmp := this.Merge(*other)
-// 	return &tmp
-// }
-
-// // Merge assumes that the two queries share the same head and only one body element
-// func (s SparqlQueryFlat) Merge(other SparqlQueryFlat) (out SparqlQueryFlat) {
-// 	if len(s.body) != 1 || len(other.body) != 1 {
-// 		log.Panicln("Target query with more than one body!")
-// 	}
-
-// 	tmp := other.StringPrefix(false)
-// 	combinedBody := "{\n" + s.body[0] + "\n}\nUNION\n{\n" + tmp + "\n}\n"
-
-// 	out.head = s.head
-// 	out.body = []string{combinedBody}
-
-// 	return out
-// }
-
-// Assumes both s and other to be monadic target queries; returns yes if other is contained in s
-func (s SparqlQueryFlat) Contained(other SparqlQueryFlat, ep endpoint) bool {
-	// test if other is non-empty
-
-	contentThis := ep.QueryFlat(s).content
-	contentOther := ep.QueryFlat(other).content
-
-	for i := range contentOther {
-		otherElement := contentOther[i][0].String()
-
-		found := false
-		for j := range contentThis {
-			thisElement := contentThis[j][0].String()
-
-			if otherElement == thisElement {
-				found = true
-			}
-		}
-
-		if !found {
-			return false
-		}
-
-	}
-
-	return true
-	// if len( == 0 || len(ep.QueryFlat(other).content[0]) == 0 {
-	// 	return true // empty query contained in everything
-	// }
-
-	// var sb strings.Builder
-
-	// for k, v := range prefixes {
-	// 	sb.WriteString("PREFIX " + k + " <" + v + ">\n")
-	// }
-
-	// sb.WriteString("\n\n")
-
-	// sb.WriteString("ASK {\n")
-
-	// sb.WriteString("{\n" + other.StringPrefix(false) + "\n}\n")
-
-	// sb.WriteString("FILTER NOT EXISTS { " + s.StringPrefix(false) + " }\n } \n")
-
-	// return !ep.QueryAsk(sb.String())
-}
-
 func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 	var sb strings.Builder
 
@@ -205,26 +177,24 @@ func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 	// 	s.body = append(s.body, renamedBody...)
 	// }
 
-	sb.WriteString("SELECT DISTINCT ")
-	sb.WriteString(strings.Join(abbrAll(s.head), " "))
+	sb.WriteString("SELECT ")
+	sb.WriteString(strings.Join(s.head, " "))
 	sb.WriteString(" { \n\t")
-	sb.WriteString(strings.Join(abbrAll(s.body), "\n\t"))
+	if s.graph != "" {
+		sb.WriteString(" GRAPH " + s.graph + " ")
+	}
+	sb.WriteString(strings.Join(s.body, "\n\t"))
+
+	if len(s.subqueries) > 0 {
+		for _, c := range s.subqueries {
+			sb.WriteString(c.ProduceBody())
+		}
+	}
 
 	sb.WriteString("} \n")
 	if len(s.group) > 0 {
 		sb.WriteString("GROUP BY ")
-		sb.WriteString(strings.Join(abbrAll(s.group), " "))
-	}
-	if len(s.having) > 0 {
-		sb.WriteString("\nHAVING (")
-
-		var havings []string
-		for i := range s.having {
-			havings = append(havings, s.having[i].String())
-		}
-
-		sb.WriteString(strings.Join(abbrAll(havings), " && "))
-		sb.WriteString(")\n")
+		sb.WriteString(strings.Join(s.group, " "))
 	}
 
 	return sb.String()
@@ -250,12 +220,19 @@ func (s SparqlQueryFlat) StringPrefix(attachPrefix bool) string {
 	// 	s.body = append(s.body, renamedBody...)
 	// }
 
-	sb.WriteString("SELECT DISTINCT ")
+	sb.WriteString("SELECT ")
 	sb.WriteString(s.head)
 	sb.WriteString(" { \n\t")
-	sb.WriteString(strings.Join(abbrAll(s.body), "\n\t"))
+	if attachPrefix && s.graph != "" { // only attach if query used stand-alone
+		sb.WriteString(" GRAPH " + s.graph + " { \n\t")
+	}
+	sb.WriteString(strings.Join(s.body, "\n\t"))
 
-	sb.WriteString("} \n")
+	if attachPrefix && s.graph != "" { // only attach if query used stand-alone
+		sb.WriteString("} \n } \n")
+	} else {
+		sb.WriteString("} \n ")
+	}
 
 	return sb.String()
 }
