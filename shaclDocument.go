@@ -7,7 +7,7 @@ import (
 
 	"github.com/fatih/color"
 
-	rdf "github.com/cem-okulmus/rdf2go-1"
+	rdf "github.com/cem-okulmus/MyRDF2Go"
 )
 
 type depMode int32
@@ -854,8 +854,6 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 		log.Panic(name, " is a recursive SHACL node  shape, as it depends on itself.")
 	}
 
-	// get Siblings:
-
 	for _, dep := range deps {
 		switch dep.mode {
 		case node, property:
@@ -1014,18 +1012,6 @@ func TargetsToQueries(targets []TargetExpression) (out []SparqlQueryFlat) {
 
 	for i := range targets {
 		term := GetTargetTerm(targets[i])
-
-		// _, ok := targets[i].(TargetIndirect)
-
-		// if !ok { // don't mess with the query in case of indirect targets
-		// 	term = strings.ReplaceAll(term, "(", "\\(")
-		// 	term = strings.ReplaceAll(term, ")", "\\)")
-		// 	term = strings.ReplaceAll(term, "'", "\\'")
-		// 	term = strings.ReplaceAll(term, "&", "\\&")
-		// 	term = strings.ReplaceAll(term, ",", "\\,")
-		// }
-
-		// term = strings.ReplaceAll(term, "&", "\\&")
 		queries = append(queries, term)
 	}
 
@@ -1043,11 +1029,6 @@ func (s *ShaclDocument) MaterialiseTargets(ep endpoint) {
 	if s.materialised { // don't repeat this for same document
 		return
 	}
-
-	// // check if result is already cached
-	// if _, ok := s.targets[name]; ok {
-	// 	return
-	// }
 
 	for name := range s.shapeNames {
 		// fmt.Println("Getting targetes for shape ", name)
@@ -1186,44 +1167,6 @@ outer:
 
 	return &out
 }
-
-// InvalidTargetsWithExplanation returns the targets that do not match the shape they are supposed
-// to, but in addition to that, also returns an explanation in the form of a witness table.
-// func (s *ShaclDocument) InvalidTargetsWithExplanation(shape string, ep endpoint) (Table, []string) {
-// 	var explanation []string
-// 	results := s.InvalidTargets(shape, ep)
-
-// 	var remaining []string
-
-// 	// 1st look for refential explanations
-// 	for i := range results.content {
-// 		if len(results.content[i]) != 1 {
-// 			log.Panicln("Resuls table not a unary relation.")
-// 		}
-
-// 		node := results.content[i][0].String()
-
-// 		refExp, unmet := s.FindReferentialFailureWitness(shape, node)
-
-// 		// look for answers from witness query instead
-// 		if !unmet {
-// 			remaining = append(remaining, node)
-// 		} else {
-// 			explanation = append(explanation, refExp)
-// 		}
-
-// 	}
-
-// 	integExp, unmet2 := s.FindWitnessQueryFailures(shape, remaining, ep)
-
-// 	// fail if there are still invalid targets left (indicating a problem in validation)
-// 	if len(remaining) > 0 && unmet2 {
-// 		log.Panic("There are still remaining invalid targets, without explanations!",
-// 			"	remaining: ", remaining, " Exps so far: ", integExp, "\n\n refExps so far:", explanation)
-// 	}
-// 	explanation = append(explanation, integExp...)
-// 	return results, explanation
-// }
 
 // Validate checks for each of the node shapes of a SHACL document, whether their target nodes
 // occur in the decorated graph with the shapes they are supposed to. If not, it returns false

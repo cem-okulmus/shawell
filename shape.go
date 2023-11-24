@@ -7,7 +7,7 @@ import (
 
 	"github.com/fatih/color"
 
-	"github.com/cem-okulmus/rdf2go-1"
+	"github.com/cem-okulmus/MyRDF2Go"
 )
 
 type Shape interface {
@@ -373,33 +373,6 @@ node:
 			}
 		}
 	}
-
-	// 	// properties
-	// prop:
-	// 	for row := range neededTable.IterRows() {
-	// 		targetNode := row[0].RawValue()
-	// 	inner:
-	// 		for k := range n.properties {
-	// 			if !n.properties[k].Nested() {
-	// 				continue inner
-	// 			}
-	// 			if !s.NodeIsShape(targetNode, n.properties[k].name) {
-	// 				report := ValidationResult{
-	// 					focusNode:                 targetNode,
-	// 					pathName:                  "",
-	// 					value:                     targetNode,
-	// 					sourceShape:               n.GetIRI(),
-	// 					sourceConstraintComponent: "sh:PropertyShapeComponent",
-	// 					severity:                  n.severity,
-	// 					message:                   n.message,
-	// 				}
-
-	// 				res = false
-	// 				reports = append(reports, report)
-	// 				continue prop // don't produce multile entries for the same term
-	// 			}
-	// 		}
-	// 	}
 
 	return res, reports
 }

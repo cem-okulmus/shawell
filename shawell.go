@@ -14,7 +14,7 @@ import (
 	"regexp"
 	"strings"
 
-	rdf "github.com/cem-okulmus/rdf2go-1"
+	rdf "github.com/cem-okulmus/MyRDF2Go"
 )
 
 var theCount int64 // lord of all things counting
@@ -180,16 +180,6 @@ var ResA = res(_rdf + "type")
 //  * support of deactivating a shape (should be easy)
 // * Getting solver into shape for JELIA
 //   - test maxCount when empty value set (use !BOUND || )
-
-// TODO:
-// * Getting solver into shape for JELIA
-//   - check if qualifiedValueShape actually works, in non-recursive example
-//   - create example that supports well-founded recursion, and explain briefly why most examples will
-//   lead to empty set under well-founded semantics
-//   - clean up the output, remove all debug printing, and produce a clear result of the validation
-//     to the user.
-
-// LOW PRIORITY TODO:
 //  * Produce proper validation reports in RDF
 //   - support severity
 //   - result message
@@ -364,10 +354,10 @@ func main() {
 		fmt.Println("VALIDATION REPORT: \n", VR)
 	}
 
-	// // Clean up the named graph afterwards
-	// if *dataIncluded {
-	// 	endpoint.ClearGraph(VR.testName.String())
-	// }
+	// Clean up the named graph afterwards
+	if *dataIncluded {
+		endpoint.ClearGraph(VR.testName.String())
+	}
 
 	// for k, v := range invalidTargets {
 	// 	fmt.Println("For node shape: ", k, " -- Invalid Targets: \n\n ", v.Limit(100))

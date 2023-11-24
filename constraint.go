@@ -9,7 +9,7 @@ import (
 
 	"github.com/fatih/color"
 
-	"github.com/cem-okulmus/rdf2go-1"
+	"github.com/cem-okulmus/MyRDF2Go"
 )
 
 type ValidationReport struct {
@@ -2347,13 +2347,6 @@ func (o ZerOrOnePath) PropertyString() string {
 	return o.path.PropertyString() + "?"
 }
 
-// func TestPropertyPath(graph rdf2go.Graph, triple rdf2go.Triple) (PropertyPath, bool) {
-// 	if triple.Predicate.RawValue() != _sh+"property" {
-// 		return SimplePath{}, false
-// 	}
-// 	return ExtractPropertyPath(graph, triple.ObjeGct), true
-// }
-
 // ExtractPropertyPath takes the input graph, and one value term from an sh:path constraint,
 // and extracts the `full` property path
 func ExtractPropertyPath(graph *rdf2go.Graph, initTerm rdf2go.Term) (out PropertyPath, err error) {
@@ -2541,14 +2534,6 @@ type TargetExpression interface {
 	Target()
 }
 
-// type ShapeCheckTarget struct{}
-
-// func (s ShapeCheckTarget) Target() {}
-
-// func (s ShapeCheckTarget) String() string {
-// 	return "Dummy Target for Checking for Shapes in Doc"
-// }
-
 type TargetIndirect struct {
 	indirection *PropertyPath
 	actual      TargetExpression
@@ -2655,11 +2640,6 @@ func GetTargetTerm(t TargetExpression) string {
 	case TargetObjectsOf:
 		queryBody = " ?obj NODE ?sub ."
 		queryBody = strings.ReplaceAll(queryBody, "NODE", t.path.String())
-
-		// case ShapeCheckTarget:
-		// 	queryBody = "?sub ?pred ?obj. \n" +
-		// 		"FILTER (?pred IN (sh:targetClass, sh:targetNode, sh:targetObjectsOf, sh:targetSubjectsOf, sh:class, sh:datatype, sh:nodeKind, sh:minExclusive, sh:maxExclusive, sh:minInclusive, sh:maxInclusive, sh:minLength, sh:maxLength, sh:pattern, sh:languageIn, sh:equals, sh:disjoint, sh:lessThan, sh:lessThanOrEquals, sh:property, sh:and, sh:or, sh:not, sh:xone, sh:node, sh:qualifiedValueShape, sh:closed, sh:hasValue, sh:in, sh:severity, sh:message, sh:deactivated)).\n" +
-		// 		"FILTER NOT EXISTS {?sub sh:path ?other.}."
 	}
 
 	return queryBody
@@ -2690,17 +2670,6 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 	var deps []dependency
 
 	var allowedPaths []string
-
-	// fmt.Println("For term, ", term)
-	// fmt.Println("Found triples", triples)
-
-	// isNodeShape := false // determine if its a proper NodeShape at all
-	// var target TargetExpression
-	// target = nil
-	// var closed bool
-	// var properties []PropertyShape
-	// var positives []string
-	// var negatives []string
 
 	for i := range triples {
 		switch triples[i].Predicate.RawValue() {

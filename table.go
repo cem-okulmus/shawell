@@ -10,7 +10,7 @@ import (
 
 	rdfA "github.com/knakk/rdf"
 
-	rdf "github.com/cem-okulmus/rdf2go-1"
+	rdf "github.com/cem-okulmus/MyRDF2Go"
 	"github.com/cem-okulmus/sparql"
 )
 

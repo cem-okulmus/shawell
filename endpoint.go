@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	rdf "github.com/cem-okulmus/rdf2go-1"
+	rdf "github.com/cem-okulmus/MyRDF2Go"
 
 	"golang.org/x/exp/constraints"
 
@@ -100,13 +100,6 @@ func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string) (out error) 
 	}
 
 	// clear graph first
-
-	// var err error
-	// if s.updateEndpoint {
-	// 	err = s.repoUpdate.Update(fmt.Sprint("CLEAR GRAPH ", s.fromGraph))
-	// } else {
-	// 	_, err = s.repo.Query(fmt.Sprint("CLEAR GRAPH ", s.fromGraph))
-	// }
 
 	err := s.ClearGraph(s.fromGraph)
 	if err != nil {
