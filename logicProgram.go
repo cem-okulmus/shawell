@@ -37,6 +37,10 @@ type program struct {
 	rules []rule
 }
 
+func (p program) IsEmpty() bool {
+	return len(p.rules) == 0
+}
+
 // TODO: no nice parsing back into the unconditional tables yet.
 
 type DLVAnswer struct {
@@ -80,6 +84,10 @@ func (d DLVOutput) ToTables() (out []Table[rdf.Term]) {
 
 // Answer sends the logic program to DLV, set to use well-founded semantics, and returns the output
 func (p program) Answer() []Table[rdf.Term] {
+	if p.IsEmpty() {
+		return []Table[rdf.Term]{}
+	}
+
 	graphLexer := lexer.Must(ebnf.New(`
     Comment = ("%" | "//") { "\u0000"…"\uffff"-"\n" } .
     Ident = (digit| alpha | "_") { Punct |  "_" | alpha | digit } .
@@ -99,7 +107,7 @@ func (p program) Answer() []Table[rdf.Term] {
 
 	cmd.Stdin = strings.NewReader(outLP)
 
-	fmt.Println("----\n\n,", outLP, "\n\n-------")
+	fmt.Println("----\n\n", outLP, "\n\n-------")
 
 	out, _ := cmd.Output()
 	// check(err)
