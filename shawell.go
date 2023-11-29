@@ -273,7 +273,7 @@ func main() {
 	// }
 
 	var res bool
-	// var invalidTargets map[string]Table
+	var invalidTargets map[string]Table[rdf.Term]
 
 	if parsedDoc.IsRecursive() {
 		fmt.Println("Recursive document parsed, tranforming to LP and sending off to DLV.")
@@ -286,10 +286,16 @@ func main() {
 		// for i := range lpTables {
 		// 	fmt.Println(lpTables[i].Limit(5))
 		// }
-		res, _ = parsedDoc.ValidateLP(lpTables, endpoint)
+		res, invalidTargets = parsedDoc.ValidateLP(lpTables, endpoint)
 
 	} else {
-		res, _ = parsedDoc.Validate(endpoint)
+		res, invalidTargets = parsedDoc.Validate(endpoint)
+	}
+
+	for _, v := range invalidTargets {
+		if v.Len() > 0 {
+			fmt.Println(" Found a shape with invalid targets: \n", v)
+		}
 	}
 
 	fmt.Println("----------------------------------")

@@ -1128,6 +1128,8 @@ func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table[rdf.Term]
 
 	var nodesWithShape Table[rdf.Term] = &TableSimple[rdf.Term]{}
 
+	shapeObj := s.shapeNames[shape]
+
 	// nodesWithShape , found :=
 
 	for i := range LPTables {
@@ -1149,9 +1151,10 @@ func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table[rdf.Term]
 	// 	return out, false
 	// }
 
-	out.header = append(out.header, "Not "+shape[len(_sh):])
+	out.header = append(out.header, "Not "+shapeObj.GetIRI())
 
 	targets := s.targets[shape]
+	
 
 outer:
 	for t_row := range targets.IterRows() { // will this work?
