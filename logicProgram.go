@@ -153,7 +153,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			for _, ref := range deps[i].name {
 				for _, v := range valuesSlice {
-					body = append(body, fmt.Sprint(ref.name, "(", v, ")"))
+					body = append(body, fmt.Sprint(ref.ref.GetQualName(), "(", v, ")"))
 				}
 			}
 
@@ -173,7 +173,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			for _, ref := range deps[i].name {
 				var bodyOne []string
 				for _, v := range valuesSlice {
-					bodyOne = append(bodyOne, fmt.Sprint(ref.name, "(", v, ")"))
+					bodyOne = append(bodyOne, fmt.Sprint(ref.ref.GetQualName(), "(", v, ")"))
 				}
 				bodyAll = append(bodyAll, bodyOne)
 			}
@@ -202,7 +202,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				}
 			}
 		case not:
-			ref := deps[i].name[0].name // not has only singular reference (in current design)
+			ref := deps[i].name[0].ref.GetQualName() // not has only singular reference (in current design)
 
 			var body []string
 			for _, v := range valuesSlice {
@@ -223,7 +223,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 		case xone: // will require some simple combinatorics
 			log.Panicln("XONE not supported yet")
 		case qualified: // will require crazy combinatorics
-			ref := deps[i].name[0].name // like not, qualified can only have single reference
+			ref := deps[i].name[0].ref.GetQualName() // like not, qualified can only have single reference
 
 			mark := fmt.Sprint("Qual", qual)
 			qual++
@@ -372,9 +372,9 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 
 	generalRule := rule{head: head, body: body}
 
-	iterChan := table.IterTargets()
+	// iterChan := table.IterTargets()
 
-	for element := range iterChan {
+	for element, groupMap := range table.group {
 		// element := row[0].RawValue()
 
 		generalRuleNew := generalRule.rewrite("VAR", "\""+strings.ToLower(element.RawValue())+"\"")
@@ -387,11 +387,11 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 			tempRules = expandRules([]rdf.Term{element}, attrMap[0], deps, header[0]+"INTERN", element.RawValue())
 		}
 
-		for _, groupMap := range table.group {
-			for index, values := range groupMap {
-				tempRules = expandRules(values, attrMap[index], deps, header[index], element.RawValue())
-			}
+		// for _, groupMap := range  {
+		for index, values := range groupMap {
+			tempRules = expandRules(values, attrMap[index], deps, header[index], element.RawValue())
 		}
+		// }
 
 		out.rules = append(out.rules, tempRules...)
 
@@ -434,8 +434,8 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 	// fmt.Println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 	// fmt.Println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 
-	if !ok {
-		log.Panic("conditional Answer for shape has not been produced yet", name)
+	if !ok { // no cond Table means there is nothing to do
+		return out
 	}
 
 	deps := shape.GetDeps()

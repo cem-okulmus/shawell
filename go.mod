@@ -25,6 +25,6 @@ require (
 )
 
 replace (
-	github.com/cem-okulmus/gon3-1 v0.2.2 => ../../../gon3-1
-	github.com/cem-okulmus/MyRDF2Go v0.1.3 => ../../../rdf2go-1
+	github.com/cem-okulmus/gon3-1 v0.2.2 => ../gon3-1
+	github.com/cem-okulmus/MyRDF2Go v0.1.3 => ../rdf2go-1
 )
