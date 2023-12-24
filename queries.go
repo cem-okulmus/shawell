@@ -14,6 +14,7 @@ func (p *PropertyShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out 
 
 	tmp := NodeShape{}
 	tmp.id = p.id
+	// tmp.insideProp = p
 
 	tmp.IRI = p.shape.IRI
 	tmp.properties = append(tmp.properties, p)
@@ -26,7 +27,7 @@ func (p *PropertyShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out 
 // presence of referential constraints (and,or,xone,node,not, qualifiedValueShape)
 func (p *PropertyShape) ToSubquery(num int) (head []string, body string, subquery *CountingSubQuery) {
 	objName := "?InnerObj" + strconv.Itoa(num)
-	path := p.path.PropertyString()
+	path := p.path
 
 	if p.minCount > 0 || p.maxCount > -1 {
 		subquery = &CountingSubQuery{}
@@ -113,29 +114,34 @@ func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out Spar
 	// body = append(body, initial)
 	targetLine := fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}")
 
-	body = append(body, targetLine)
+	out.target = targetLine
+	// body = append(body, targetLine)
 
 	// UNIVERSAL
 
 	for i := range n.valuetypes {
-		body = append(body, n.valuetypes[i].SparqlBody("?sub", ""))
+		body = append(body, n.valuetypes[i].SparqlBody("?sub", nil))
 	}
 	for i := range n.valueranges {
-		body = append(body, n.valueranges[i].SparqlBody("?sub", ""))
+		body = append(body, n.valueranges[i].SparqlBody("?sub", nil))
 	}
 	for i := range n.stringconts {
-		body = append(body, n.stringconts[i].SparqlBody("?sub", ""))
+		body = append(body, n.stringconts[i].SparqlBody("?sub", nil))
 	}
 	for i := range n.others {
-		body = append(body, n.others[i].SparqlBody("?sub", ""))
+		body = append(body, n.others[i].SparqlBody("?sub", nil))
 	}
 	for i := range n.propairconts {
-		body = append(body, n.propairconts[i].SparqlBody("?sub", ""))
+		body = append(body, n.propairconts[i].SparqlBody("?sub", nil))
 	}
 
 	// leaving out property pair constraints; cannot appear inside node shape
 
 	for i, p := range n.properties {
+		if p.Nested() {
+			continue // don't produce a subquery for a nested query, as those are internal deps
+		}
+
 		// headP, bodyP, havingP := p.ToSubquery(i, len(p.shape.deps) > 0)
 		headP, bodyP, subquery := p.ToSubquery(i)
 
@@ -154,7 +160,7 @@ func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out Spar
 			nameOfRef := p.GetQualName()
 
 			// head = append(head, fmt.Sprint("( GROUP_CONCAT(DISTINCT ?InnerObj", i, "; separator=' ') AS ?", nameOfRef, " )"))
-			head = append(head, fmt.Sprint("( ?InnerObj", i, " AS ?", nameOfRef, "group )"))
+			head = append(head, fmt.Sprint("( ?InnerObj", i, " AS ?", nameOfRef, " )"))
 		}
 
 	}

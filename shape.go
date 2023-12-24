@@ -13,8 +13,8 @@ import (
 type Shape interface {
 	IsShape()
 	String() string
+	StringTab(int, bool, bool) string
 	ToSparql(fromGraph string, target SparqlQueryFlat) SparqlQuery
-	// ToSparqlFlat(target SparqlQueryFlat) SparqlQueryFlat
 	GetIRI() string
 	GetDeps() []dependency
 	GetTargets() []TargetExpression
@@ -23,6 +23,7 @@ type Shape interface {
 	IsActive() bool
 	IsBlank() bool
 	GetQualName() string
+	GetLogName() string
 }
 
 func TransformToIndirect(input []TargetExpression) (out []TargetIndirect) {
@@ -60,13 +61,17 @@ type NodeShape struct {
 	nodes           []ShapeRef            // restrict the property universally to a shape
 	qualifiedShapes []QSConstraint        // restrict the property existentially to a given number of nodes to be matched
 	// MINOR STUFF
-	severity    string // used in validation
-	message     string // used in validation
-	deactivated bool   // if true, then shape is ignored in validation
+	severity    rdf2go.Term            // used in validation
+	message     map[string]rdf2go.Term // used in validation
+	deactivated bool                   // if true, then shape is ignored in validation
 	// DEPENDECY TO OTHER SHAPES
 	deps []dependency
 	// insideProp
 	insideProp *PropertyShape
+}
+
+func (n *NodeShape) GetLogName() string {
+	return fmt.Sprint("Shape", n.id)
 }
 
 func (n *NodeShape) GetQualName() string {
@@ -86,21 +91,30 @@ func (n *NodeShape) AddIndirectTargets(indirect []TargetIndirect, viaPath *Prope
 	}
 }
 
-func (n *NodeShape) GetConstraints(propertyName, path, obj string, targetsFromParent *[]TargetExpression) (out []ConstraintInstantiation) {
-	var shapeName string
-	if propertyName != "" {
-		shapeName = propertyName
-	} else {
-		shapeName = n.GetIRI()
-	}
+func (n *NodeShape) GetConstraints(propertyName string, path PropertyPath, obj string, targetsFromParent *[]TargetExpression) (out []ConstraintInstantiation) {
+	var shapeName rdf2go.Term = n.IRI
+	// if propertyName != "" {
+	// 	shapeName = propertyName
+	// } else {
+	// 	if n.IsBlank() {
+	// 		shapeName = "_:" + n.IRI
+	// 	} else {
+	// 		shapeName = n.GetIRI()
+	// 	}
+	// }
 
-	targets := n.GetValidationTargets()
+	// fmt.Println("Using shapename: ", shapeName)
+
+	var targets []TargetExpression
 
 	if targetsFromParent != nil {
-		targets = append(targets, *targetsFromParent...) // include the targets inherited from parent
+		targets = *targetsFromParent // include the targets inherited from parent
+	} else {
+		targets = n.GetValidationTargets()
 	}
 
 	for i := range n.valuetypes {
+		// fmt.Println("ValueType: ", shapeName)
 		tmp := ConstraintInstantiation{
 			constraint: n.valuetypes[i],
 			path:       path,
@@ -174,15 +188,22 @@ func (n *NodeShape) GetConstraints(propertyName, path, obj string, targetsFromPa
 	return out
 }
 
-func (s ShaclDocument) GetValidationReport(n *NodeShape, ep endpoint) (res bool, reports []ValidationResult) {
-	constraints := n.GetConstraints("", "", "?sub", nil)
+func (s ShaclDocument) GetValidationReport(n *NodeShape, ep endpoint) (result bool, reports []ValidationResult) {
+	constraints := n.GetConstraints("", nil, "?sub", nil)
 
-	fmt.Println("NodeShape: ", n.IRI, " number of constraints ", len(constraints))
+	if s.debug {
+		fmt.Println("NodeShape: ", n.IRI, " number of constraints ", len(constraints))
+	}
+
+	// fmt.Println("Started computing all ValidationTargets")
 
 	targets := n.GetValidationTargets()
 
-	res = true
+	// fmt.Println("Computed all ValidationTargets")
 
+	result = true
+
+	// fmt.Println("Started to Compute all Constraints")
 	// handle non-logical constraints
 	for i := range constraints {
 		out, report := constraints[i].SparqlCheck(ep)
@@ -191,69 +212,95 @@ func (s ShaclDocument) GetValidationReport(n *NodeShape, ep endpoint) (res bool,
 		// fmt.Println("Number of reports produced: ", len(report))
 
 		if !out {
-			res = false
+			result = false
 		}
 		reports = append(reports, report...)
 	}
+
+	// fmt.Println("Computed all Constraints")
 
 	// Get Reports for Properties
 
+	// fmt.Println("Computing VRs from Properties")
 	for i := range n.properties {
-		fmt.Println("Passing on targets: ")
-		for i := range targets {
-			fmt.Println(targets[i])
+		if s.debug {
+			fmt.Println("Passing on targets: ")
 		}
 
-		fmt.Println("\n To Property ", n.properties[i].GetIRI())
+		// for i := range targets {
+		// 	fmt.Println(targets[i])
+		// }
 
-		out, report := s.GetValidationReportProperty(n.properties[i], ep, &targets, n.GetIRI())
+		if s.debug {
+			fmt.Println("\n To Property ", n.properties[i].GetIRI())
+		}
 
-		fmt.Println("Checking Reports for Property: ", n.properties[i].name, " num of repoorts ", len(report))
+		out, report := s.GetVRProperty(n.properties[i], ep, &targets, n.GetIRI())
+		// fmt.Println("Got VRs from property, ", n.properties[i].shape.GetIRI())
+
+		if s.debug {
+			fmt.Println("Checking Reports for Property: ", n.properties[i].name, " num of repoorts ", len(report))
+		}
 
 		if !out {
-			res = false
+			result = false
 		}
 		reports = append(reports, report...)
 	}
 
+	// fmt.Println("Done Computing VRs from Properties")
+
 	// DO the stuff for logical constraitns
 
+	// fmt.Println("Computing needed Table")
 	// TODO: get rid of this and just use condTable, plus searching for the right attribute
 	targetQueries := TargetsToQueries(targets)
-	neededTable := GetTableForLogicalConstraints(ep, "", "", targetQueries)
+	neededTable := GetTableForLogicalConstraints(ep, nil, "", targetQueries)
 
-	fmt.Println("Needed Table", neededTable)
+	// fmt.Println("Done Computing needed Table")
+
+	if s.debug {
+		fmt.Println("Needed Table", neededTable)
+	}
 
 	// AND
 
+	// fmt.Println("Computing Logical VRs for AND")
+
 and:
 	for row := range neededTable.IterRows() {
-		targetNode := row[0].RawValue()
-		fmt.Println("Cheking target ", targetNode, " with ", len(n.ors))
+		targetNode := row[0]
+		if s.debug {
+			fmt.Println("Checking target ", targetNode, " with ", len(n.ors))
+		}
 		for k := range n.ands.shapes {
-			fmt.Println("Cheking if target is of shape ", n.ands.shapes[k].name)
+			if s.debug {
+				fmt.Println("Cheking if target is of shape ", n.ands.shapes[k].name)
+			}
 			if !s.NodeIsShape(targetNode, n.ands.shapes[k].name) {
 				report := ValidationResult{
 					focusNode:                 targetNode,
-					pathName:                  "",
+					pathName:                  nil,
 					value:                     targetNode,
-					sourceShape:               n.GetIRI(),
-					sourceConstraintComponent: "sh:AndConstraintComponent",
+					sourceShape:               n.IRI,
+					sourceConstraintComponent: res(_sh + "AndConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
 
-				res = false
+				result = false
 				reports = append(reports, report)
 				continue and // don't produce multiple entries for the same term
 			}
 		}
 	}
 
+	// fmt.Println("Computing Logical VRs for OR")
+
 	// OR
 or:
 	for row := range neededTable.IterRows() {
-		targetNode := row[0].RawValue()
+		targetNode := row[0]
 		// fmt.Println("Cheking target ", targetNode, " with ", len(n.ors))
 		for k := range n.ors {
 			currOr := n.ors[k]
@@ -273,15 +320,15 @@ or:
 			if !satisfyAtLeastOne {
 				report := ValidationResult{
 					focusNode:                 targetNode,
-					pathName:                  "",
+					pathName:                  nil,
 					value:                     targetNode,
-					sourceShape:               n.GetIRI(),
-					sourceConstraintComponent: "sh:OrConstraintComponent",
+					sourceShape:               n.IRI,
+					sourceConstraintComponent: res(_sh + "OrConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
 
-				res = false
+				result = false
 				reports = append(reports, report)
 				continue or // don't produce multiple entries for the same term
 			}
@@ -290,33 +337,37 @@ or:
 
 	// NOT
 
+	// fmt.Println("Computing Logical VRs for NOT")
+
 not:
 	for row := range neededTable.IterRows() {
-		targetNode := row[0].RawValue()
+		targetNode := row[0]
 		for k := range n.nots {
 			if s.NodeIsShape(targetNode, n.nots[k].shape.name) {
 				report := ValidationResult{
 					focusNode:                 targetNode,
-					pathName:                  "",
+					pathName:                  nil,
 					value:                     targetNode,
-					sourceShape:               n.GetIRI(),
-					sourceConstraintComponent: "sh:NotConstraintComponent",
+					sourceShape:               n.IRI,
+					sourceConstraintComponent: res(_sh + "NotConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
 
-				res = false
+				result = false
 				reports = append(reports, report)
 				continue not // don't produce multile entries for the same term
 			}
 		}
 	}
 
+	// fmt.Println("Computing Logical VRs for XONE")
+
 	// XONE
 
 xone:
 	for row := range neededTable.IterRows() {
-		targetNode := row[0].RawValue()
+		targetNode := row[0]
 		for k := range n.xones {
 			currXone := n.xones[k]
 
@@ -335,46 +386,49 @@ xone:
 			if numSatisfied != 1 {
 				report := ValidationResult{
 					focusNode:                 targetNode,
-					pathName:                  "",
+					pathName:                  nil,
 					value:                     targetNode,
-					sourceShape:               n.GetIRI(),
-					sourceConstraintComponent: "sh:XoneConstraintComponent",
+					sourceShape:               n.IRI,
+					sourceConstraintComponent: res(_sh + "XoneConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
 
-				res = false
+				result = false
 				reports = append(reports, report)
 				continue xone // don't produce multile entries for the same term
 			}
 		}
 	}
 
+	// fmt.Println("Computing Logical VRs for NODE")
+
 	// NODE
 
 node:
 	for row := range neededTable.IterRows() {
-		targetNode := row[0].RawValue()
+		targetNode := row[0]
 		for k := range n.nodes {
 			if !s.NodeIsShape(targetNode, n.nodes[k].name) {
+
 				report := ValidationResult{
 					focusNode:                 targetNode,
-					pathName:                  "",
+					pathName:                  nil,
 					value:                     targetNode,
-					sourceShape:               n.GetIRI(),
-					sourceConstraintComponent: "sh:NodeConstraintComponent",
+					sourceShape:               n.IRI,
+					sourceConstraintComponent: res(_sh + "NodeConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
 
-				res = false
+				result = false
 				reports = append(reports, report)
 				continue node // don't produce multile entries for the same term
 			}
 		}
 	}
 
-	return res, reports
+	return result, reports
 }
 
 func (n *NodeShape) GetValidationTargets() []TargetExpression {
@@ -425,10 +479,10 @@ func (n *NodeShape) GetIRI() string { return n.IRI.RawValue() }
 func (n *NodeShape) IsShape() {}
 
 func (n *NodeShape) String() string {
-	return n.StringTab(0, false)
+	return n.StringTab(0, false, false)
 }
 
-func (n *NodeShape) StringTab(a int, insideProperty bool) string {
+func (n *NodeShape) StringTab(a int, insideProperty bool, debug bool) string {
 	tab := "\n" + strings.Repeat("\t", a+2)
 
 	var sb strings.Builder
@@ -461,6 +515,9 @@ func (n *NodeShape) StringTab(a int, insideProperty bool) string {
 			case TargetNode:
 				sb.WriteString("(TargetNode) ")
 			case TargetIndirect:
+				if !debug {
+					continue
+				}
 				sb.WriteString("(Indirect)")
 			}
 			sb.WriteString(n.target[i].String())
@@ -528,7 +585,7 @@ func (n *NodeShape) StringTab(a int, insideProperty bool) string {
 
 	for i := range n.properties {
 		sb.WriteString(fmt.Sprint(_sh, "property "))
-		sb.WriteString(n.properties[i].StringTab(a+1, true))
+		sb.WriteString(n.properties[i].StringTab(a+1, true, debug))
 		sb.WriteString(tab)
 	}
 
@@ -546,6 +603,10 @@ func (n *NodeShape) StringTab(a int, insideProperty bool) string {
 
 	if !n.IsActive() {
 		sb.WriteString(red.Sprint(_sh, "deactivated true", tab))
+	}
+
+	for _, v := range n.message {
+		sb.WriteString(fmt.Sprint(_sh, "message ", v.String(), tab))
 	}
 
 	return sb.String()
@@ -569,7 +630,13 @@ func (p *PropertyShape) Nested() bool {
 	return len(p.shape.properties) != 0
 }
 
-func (p *PropertyShape) GetQualName() string { return fmt.Sprint("Property", p.id) }
+func (p *PropertyShape) GetLogName() string {
+	return fmt.Sprint("Shape", p.id)
+}
+
+func (p *PropertyShape) GetQualName() string {
+	return fmt.Sprint("Property", p.id)
+}
 
 func (p *PropertyShape) AddIndirectTargets(indirect []TargetIndirect, viaPath *PropertyPath) {
 	p.shape.AddIndirectTargets(indirect, viaPath)
@@ -579,17 +646,29 @@ func (p *PropertyShape) GetConstraints(num int, targetsFromParent *[]TargetExpre
 	uniqObj := fmt.Sprint("?InnerObj", num)
 
 	// Constraints inherited from NodeShape
-	out = append(out, p.shape.GetConstraints(p.name, p.path.PropertyString(), uniqObj, targetsFromParent)...)
+	out = append(out, p.shape.GetConstraints(p.name, p.path, uniqObj, targetsFromParent)...)
 
 	return out
 }
 
-func (s ShaclDocument) GetValidationReportProperty(p *PropertyShape, ep endpoint, targetsFromParent *[]TargetExpression, parent string) (res bool, reports []ValidationResult) {
+// var someCount int = 1
+
+func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromParent *[]TargetExpression, parent string) (result bool, reports []ValidationResult) {
 	constraints := p.GetConstraints(0, targetsFromParent)
 
-	targets := p.GetValidationTargets()
+	var targets []TargetExpression
+	if targetsFromParent != nil {
+		targets = *targetsFromParent
+	} else {
+		targets = p.GetValidationTargets()
+	}
+	// fmt.Println("Started computing all ValidationTargets")
 
-	targets = append(targets, *targetsFromParent...)
+	// fmt.Println("Computed all ValidationTargets")
+
+	// targets = append(targets, *targetsFromParent...)
+
+	// fmt.Println("Started to Compute all Constraints")
 
 	// Adding CardinalityConstraints
 
@@ -602,8 +681,8 @@ func (s ShaclDocument) GetValidationReportProperty(p *PropertyShape, ep endpoint
 		minConstraintInstant := ConstraintInstantiation{
 			constraint: minConstraint,
 			obj:        "?obj",
-			path:       p.path.PropertyString(),
-			shapeName:  p.name,
+			path:       p.path,
+			shapeName:  p.shape.IRI,
 			targets:    targets,
 			severity:   p.shape.severity,
 			message:    p.shape.message,
@@ -621,8 +700,8 @@ func (s ShaclDocument) GetValidationReportProperty(p *PropertyShape, ep endpoint
 		maxConstraintInstant := ConstraintInstantiation{
 			constraint: maxConstraint,
 			obj:        "?obj",
-			path:       p.path.PropertyString(),
-			shapeName:  p.name,
+			path:       p.path,
+			shapeName:  p.shape.IRI,
 			targets:    targets,
 			severity:   p.shape.severity,
 			message:    p.shape.message,
@@ -631,23 +710,33 @@ func (s ShaclDocument) GetValidationReportProperty(p *PropertyShape, ep endpoint
 		constraints = append(constraints, maxConstraintInstant)
 	}
 
-	res = true
+	// fmt.Println("Computed all Constraints")
+
+	result = true
 
 	// handle non-logical constraints
 	for i := range constraints {
 
 		out, report := constraints[i].SparqlCheck(ep)
+		// for k := range report {
+		// 	fmt.Println("IN VR Report Property, ", report[k].sourceShape)
+		// 	fmt.Println("Strigner: ", report[k])
+		// }
 
 		if !out {
-			res = false
+			result = false
 		}
 		reports = append(reports, report...)
 	}
 
+	// fmt.Println("Computing VRs from Properties")
+
 	// Get Reports for Properties
 
 	for i := range p.shape.properties {
-		fmt.Println("Passing on targets: ")
+		if s.debug {
+			fmt.Println("Passing on targets: ")
+		}
 
 		var newTargets []TargetExpression
 
@@ -668,132 +757,166 @@ func (s ShaclDocument) GetValidationReportProperty(p *PropertyShape, ep endpoint
 				}
 			}
 			newTargets = append(newTargets, tmp)
-			fmt.Println(targets[i])
+			// fmt.Println(targets[i])
 		}
 
-		fmt.Println("\n To Property ", p.shape.properties[i].GetIRI())
-		out, report := s.GetValidationReportProperty(p.shape.properties[i], ep, &newTargets, p.GetIRI())
+		if s.debug {
+			fmt.Println("\n To Property ", p.shape.properties[i].GetIRI())
+		}
+		out, report := s.GetVRProperty(p.shape.properties[i], ep, &newTargets, p.GetIRI())
+
+		// fmt.Println("Got VRs from property, ", p.shape.properties[i].shape.GetIRI())
 
 		if !out {
-			res = false
+			result = false
 		}
 		reports = append(reports, report...)
 	}
+
+	// fmt.Println("Done Computing VRs from Properties")
 
 	// DO the stuff for logical constraitns
 
 	// fmt.Println("Property: ", p.name, " AFter removeAbbr")
 
+	// fmt.Println("Computing needed Table")
+
 	targetQueries := TargetsToQueries(targets)
-	neededTableBeforeCheck := GetTableForLogicalConstraints(ep, p.path.PropertyString(), p.GetQualName(), targetQueries)
+	neededTableBeforeCheck := GetTableForLogicalConstraints(ep, p.path, p.GetQualName(), targetQueries)
 
 	neededTable, ok := neededTableBeforeCheck.(*GroupedTable[rdf2go.Term])
 	if !ok {
 		log.Panicln("Received non-grouped table from GetTableForLogicalConstraints")
 	}
 
-	fmt.Println("Needed Table Prop", neededTable)
+	if s.debug {
+		fmt.Println("Needed Table Prop", neededTable)
+	}
+
+	// fmt.Println("Done Computing needed Table")
+
+	// fmt.Println("Computing Logical VRs for AND")
 
 	// AND
 	for target := range neededTable.IterTargets() {
-		for k := range p.shape.ands.shapes {
 
-			// values := strings.Split(neededTable.content[i][1].RawValue(), " ")
-			values := neededTable.GetGroupOfTarget(target, 1)
+		// values := strings.Split(neededTable.content[i][1].RawValue(), " ")
+		values := neededTable.GetGroupOfTarget(target, 1)
 
-			for _, v := range values {
-
-				fmt.Println("For the value ", v, " checking if it is shape ", p.shape.ands.shapes[k].ref.GetQualName())
-				if !s.NodeIsShape(v.RawValue(), p.shape.ands.shapes[k].name) {
+	valuesAND:
+		for _, v := range values {
+			for k := range p.shape.ands.shapes {
+				if s.debug {
+					fmt.Println("For the value ", v, " checking if it is shape ", p.shape.ands.shapes[k].ref.GetQualName())
+				}
+				if !s.NodeIsShape(v, p.shape.ands.shapes[k].name) {
 					report := ValidationResult{
-						focusNode:                 target.String(),
-						pathName:                  p.path.PropertyString(),
-						value:                     v.String(),
-						sourceShape:               p.name,
-						sourceConstraintComponent: "sh:AndConstraintComponent",
+						focusNode:                 target,
+						pathName:                  p.path,
+						value:                     v,
+						sourceShape:               p.shape.IRI,
+						sourceConstraintComponent: res(_sh + "AndConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
-					res = false
+					result = false
 					reports = append(reports, report)
+					continue valuesAND // only one entry per value
 				}
 			}
 		}
 	}
 
+	// fmt.Println("Computing Logical VRs for OR")
+
+	// OR
 	for target := range neededTable.IterTargets() {
-		fmt.Println("Cheking target ", target, " with ", len(p.shape.ors))
-		for k := range p.shape.ors {
-			currOr := p.shape.ors[k]
+		if s.debug {
+			fmt.Println("Cheking target ", target, " with ", len(p.shape.ors))
+		}
 
-			values := neededTable.GetGroupOfTarget(target, 1)
+		values := neededTable.GetGroupOfTarget(target, 1)
 
-			fmt.Println("At curr Or ", currOr, " with ", len(values))
-			for _, v := range values {
+	valuesOR:
+		for _, v := range values {
+			for k := range p.shape.ors {
+				currOr := p.shape.ors[k]
+
+				if s.debug {
+					fmt.Println("At curr Or ", currOr, " with ", len(values))
+				}
 
 				satisfyAtLeastOne := false
 
 				for j := range currOr.shapes {
-					fmt.Println("Cheking if,", v, " , is of shape ", currOr.shapes[j].name)
-					if s.NodeIsShape(v.RawValue(), currOr.shapes[j].name) {
+					if s.debug {
+						fmt.Println("Cheking if,", v, " , is of shape ", currOr.shapes[j].name)
+					}
+					if s.NodeIsShape(v, currOr.shapes[j].name) {
 						satisfyAtLeastOne = true
 					}
 				}
 
 				if !satisfyAtLeastOne {
-
 					report := ValidationResult{
-						focusNode:                 target.String(),
-						pathName:                  p.path.PropertyString(),
-						value:                     v.String(),
-						sourceShape:               p.name,
-						sourceConstraintComponent: "sh:OrConstraintComponent",
+						focusNode:                 target,
+						pathName:                  p.path,
+						value:                     v,
+						sourceShape:               p.shape.IRI,
+						sourceConstraintComponent: res(_sh + "OrConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
 
-					res = false
+					result = false
 					reports = append(reports, report)
+					continue valuesOR
 				}
 			}
 		}
 	}
 
+	// fmt.Println("Computing Logical VRs for NOT")
+	// NOT
 	for target := range neededTable.IterTargets() {
 		for k := range p.shape.nots {
 
 			values := neededTable.GetGroupOfTarget(target, 1)
 
 			for _, v := range values {
-				if s.NodeIsShape(v.RawValue(), p.shape.nots[k].shape.name) {
+				if s.NodeIsShape(v, p.shape.nots[k].shape.name) {
 					report := ValidationResult{
-						focusNode:                 target.String(),
-						pathName:                  p.path.PropertyString(),
-						value:                     v.String(),
-						sourceShape:               p.name,
-						sourceConstraintComponent: "sh:NotConstraintComponent",
+						focusNode:                 target,
+						pathName:                  p.path,
+						value:                     v,
+						sourceShape:               p.shape.IRI,
+						sourceConstraintComponent: res(_sh + "NotConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
 
-					res = false
+					result = false
 					reports = append(reports, report)
 				}
 			}
 		}
 	}
 
+	// fmt.Println("Computing Logical VRs for XONE")
+
 	// XONE
 	for target := range neededTable.IterTargets() {
-		for k := range p.shape.xones {
-			currXone := p.shape.xones[k]
 
-			numSatisfied := 0
-			values := neededTable.GetGroupOfTarget(target, 1)
+		values := neededTable.GetGroupOfTarget(target, 1)
 
-			for _, v := range values {
+	valuesXOR:
+		for _, v := range values {
+			for k := range p.shape.xones {
+				currXone := p.shape.xones[k]
+
+				numSatisfied := 0
 				for j := range currXone.shapes {
-					if s.NodeIsShape(v.RawValue(), currXone.shapes[j].name) {
+					if s.NodeIsShape(v, currXone.shapes[j].name) {
 						numSatisfied++
 					}
 
@@ -804,45 +927,51 @@ func (s ShaclDocument) GetValidationReportProperty(p *PropertyShape, ep endpoint
 
 				if numSatisfied > 1 {
 					report := ValidationResult{
-						focusNode:                 target.String(),
-						pathName:                  p.path.PropertyString(),
-						value:                     v.String(),
-						sourceShape:               p.name,
-						sourceConstraintComponent: "sh:XoneConstraintComponent",
+						focusNode:                 target,
+						pathName:                  p.path,
+						value:                     v,
+						sourceShape:               p.shape.IRI,
+						sourceConstraintComponent: res(_sh + "XoneConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
 
-					res = false
+					result = false
 					reports = append(reports, report)
+					continue valuesXOR
 				}
 			}
 		}
 	}
+	// fmt.Println("Computing Logical VRs for NODE")
 
 	// NODE
+	// someCount++
 	for target := range neededTable.IterTargets() {
 		for k := range p.shape.nodes {
 			values := neededTable.GetGroupOfTarget(target, 1)
 
+			// fmt.Println("In ", p.GetLogName(), "Lengh of vlues", len(values), "targert", target, "at shape", p.shape.nodes[k].name, " some", someCount)
 			for _, v := range values {
-				if !s.NodeIsShape(v.RawValue(), p.shape.nodes[k].name) {
+				if !s.NodeIsShape(v, p.shape.nodes[k].name) {
 					report := ValidationResult{
-						focusNode:                 target.String(),
-						pathName:                  p.path.PropertyString(),
-						value:                     v.String(),
-						sourceShape:               p.name,
-						sourceConstraintComponent: "sh:NodeConstraintComponent",
+						focusNode:                 target,
+						pathName:                  p.path,
+						value:                     v,
+						sourceShape:               p.shape.IRI,
+						sourceConstraintComponent: res(_sh + "NodeConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
 
-					res = false
+					result = false
 					reports = append(reports, report)
 				}
 			}
 		}
 	}
+
+	// fmt.Println("Computing Logical VRs for QUALIFIED")
 
 	// Qualified
 	for target := range neededTable.IterTargets() {
@@ -875,10 +1004,10 @@ func (s ShaclDocument) GetValidationReportProperty(p *PropertyShape, ep endpoint
 
 		outer:
 			for _, v := range values {
-				if s.NodeIsShape(v.RawValue(), currQS.shape.name) {
+				if s.NodeIsShape(v, currQS.shape.name) {
 					if currQS.disjoint { // for disjoint QSConstraints, first check if not a sibling value
 						for _, sib := range siblingsNames {
-							if s.NodeIsShape(v.RawValue(), sib) {
+							if s.NodeIsShape(v, sib) {
 								continue outer // don't count any value that satisfies
 							}
 						}
@@ -890,35 +1019,36 @@ func (s ShaclDocument) GetValidationReportProperty(p *PropertyShape, ep endpoint
 
 			if currQS.max != -1 && numSatisfied > currQS.max {
 				report := ValidationResult{
-					focusNode:                 target.String(),
-					pathName:                  p.path.PropertyString(),
-					sourceShape:               p.name,
-					sourceConstraintComponent: "sh:QualifiedMaxCountConstraintComponent",
+					focusNode:                 target,
+					pathName:                  p.path,
+					sourceShape:               p.shape.IRI,
+					sourceConstraintComponent: res(_sh + "QualifiedMaxCountConstraintComponent"),
 					severity:                  p.shape.severity,
 					message:                   p.shape.message,
 				}
 
-				res = false
+				result = false
 				reports = append(reports, report)
 			}
 
 			if numSatisfied < currQS.min {
+
 				report := ValidationResult{
-					focusNode:                 target.String(),
-					pathName:                  p.path.PropertyString(),
-					sourceShape:               p.name,
-					sourceConstraintComponent: "sh:QualifiedMinCountConstraintComponent",
+					focusNode:                 target,
+					pathName:                  p.path,
+					sourceShape:               p.shape.IRI,
+					sourceConstraintComponent: res(_sh + "QualifiedMinCountConstraintComponent"),
 					severity:                  p.shape.severity,
 					message:                   p.shape.message,
 				}
 
-				res = false
+				result = false
 				reports = append(reports, report)
 			}
 		}
 	}
 
-	return res, reports
+	return result, reports
 }
 
 func (p *PropertyShape) GetTargets() []TargetExpression { return p.shape.GetTargets() }
@@ -934,10 +1064,10 @@ func (p *PropertyShape) GetDeps() []dependency { return p.shape.deps }
 func (p *PropertyShape) IsShape() {}
 
 func (p *PropertyShape) String() string {
-	return p.StringTab(0, false)
+	return p.StringTab(0, false, false)
 }
 
-func (p *PropertyShape) StringTab(a int, insideNode bool) string {
+func (p *PropertyShape) StringTab(a int, insideNode bool, debug bool) string {
 	tab := "\n" + strings.Repeat("\t", a+2)
 	var sb strings.Builder
 
@@ -968,7 +1098,7 @@ func (p *PropertyShape) StringTab(a int, insideNode bool) string {
 
 	// sb.WriteString("Rest of PropShape:")
 	// sb.WriteString(tab)
-	sb.WriteString(p.shape.StringTab(a, true))
+	sb.WriteString(p.shape.StringTab(a, true, debug))
 
 	return sb.String()
 }

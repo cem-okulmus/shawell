@@ -17,40 +17,145 @@ type ValidationReport struct {
 	label       rdf2go.Term // human-readable description of test
 	dataGraph   rdf2go.Term // location of datagraph info
 	shapesGraph rdf2go.Term //  location of shapesGraph info
-	result      bool
+	conforms    bool
 	results     []ValidationResult // resutls
 }
 
 func ExtractValidationReport(graph *rdf2go.Graph) (out *ValidationReport, err error) {
 	var tmp ValidationReport
-
+	var parsedResults []ValidationResult
 	out = &tmp
 
+	// this part only works for test suite stuff
 	_sht := prefixes["sht:"] // living dangerously
 	found := graph.One(nil, res(_rdf+"type"), res(_sht+"Validate"))
-	if found == nil {
-		fmt.Println("Prefixes: ", prefixes)
-		return nil, errors.New("not a valid test suite file")
+	if found != nil {
+		// fmt.Println("Prefixes: ", prefixes)
+		// return nil, errors.New("not a valid test suite file")
+		out.testName = found.Subject
 	}
 
 	LabelFound := graph.One(found.Subject, res(_rdfs+"label"), nil)
-	if LabelFound == nil {
-		fmt.Println("Prefixes: ", prefixes)
-		return nil, errors.New("not a valid test suite file")
+	if LabelFound != nil {
+		// fmt.Println("Prefixes: ", prefixes)
+		// return nil, errors.New("not a valid test suite file")
+		out.label = LabelFound.Object
 	}
 
 	dataGraphFound := graph.One(nil, res(_sht+"dataGraph"), nil)
 	shapesGraphFound := graph.One(nil, res(_sht+"shapesGraph"), nil)
 
-	if dataGraphFound == nil || shapesGraphFound == nil {
-		fmt.Println("Prefixes: ", prefixes)
-		return nil, errors.New("not a valid test suite file")
+	if dataGraphFound != nil {
+		out.dataGraph = dataGraphFound.Object
+	}
+	if shapesGraphFound != nil {
+		// fmt.Println("Prefixes: ", prefixes)
+		// return nil, errors.New("not a valid test suite file")
+		out.shapesGraph = shapesGraphFound.Object
 	}
 
-	out.testName = found.Subject
-	out.label = LabelFound.Object
-	out.dataGraph = dataGraphFound.Object
-	out.shapesGraph = shapesGraphFound.Object
+	// parse generic ValidationReports
+
+	vr := graph.One(nil, res(_rdf+"type"), res(_sh+"ValidationReport"))
+	if vr == nil {
+		return nil, errors.New("no validation report defined")
+	}
+
+	conformTriple := graph.One(vr.Subject, res(_sh+"conforms"), nil)
+	if conformTriple == nil {
+		return nil, errors.New("missing sh:conforms in ValidationReport")
+	}
+
+	results := graph.All(vr.Subject, res(_sh+"result"), nil)
+
+	for i := range results {
+		rTriple := results[i]
+
+		result, err := ExtractValidationResult(rTriple.Object, graph)
+		if err != nil {
+			return out, err
+		}
+
+		parsedResults = append(parsedResults, *result)
+	}
+
+	// putting it all together
+
+	out.conforms, err = strconv.ParseBool(conformTriple.Object.RawValue())
+	if err != nil {
+		return out, err
+	}
+
+	out.results = parsedResults
+
+	return out, nil
+}
+
+func ExtractValidationResult(sub rdf2go.Term, graph *rdf2go.Graph) (out *ValidationResult, err error) {
+	out = &ValidationResult{}
+	focusBindings := graph.All(sub, res(_sh+"focusNode"), nil)
+	if len(focusBindings) != 1 {
+		allBindings := graph.All(sub, nil, nil)
+		return out, errors.New(fmt.Sprint(" invalid number of sh:focusNode tripes: ", len(focusBindings), " at sub ", sub, " all bindings ", allBindings))
+	}
+	out.focusNode = focusBindings[0].Object
+
+	pathBinding := graph.All(sub, res(_sh+"resultPath"), nil)
+	if len(pathBinding) > 1 {
+		return out, errors.New(fmt.Sprint(" invalid number of sh:resultPath tripes: ", len(focusBindings)))
+	} else if len(pathBinding) == 1 {
+		out.pathName, err = ExtractPropertyPath(graph, pathBinding[0].Object)
+		if err != nil {
+			return out, err
+		}
+	}
+
+	valueBinding := graph.All(sub, res(_sh+"value"), nil)
+	if len(valueBinding) > 1 {
+		return out, errors.New(fmt.Sprint(" invalid number of sh:value tripes: ", len(focusBindings)))
+	} else if len(valueBinding) == 1 {
+		out.value = valueBinding[0].Object
+	}
+
+	sourceCCBinding := graph.All(sub, res(_sh+"sourceConstraintComponent"), nil)
+	if len(sourceCCBinding) != 1 {
+		return out, errors.New(fmt.Sprint(" invalid number of sh:sourceConstraintComponent tripes: ", len(sourceCCBinding)))
+	}
+	out.sourceConstraintComponent = sourceCCBinding[0].Object
+
+	sourceShapeBinding := graph.All(sub, res(_sh+"sourceShape"), nil)
+	if len(sourceShapeBinding) > 1 {
+		return out, errors.New(fmt.Sprint(" invalid number of sh:sourceShape tripes: ", len(sourceShapeBinding)))
+	} else if len(sourceShapeBinding) == 1 {
+		out.sourceShape = sourceShapeBinding[0].Object
+	}
+
+	// TODO extract Details
+
+	out.message = make(map[string]rdf2go.Term)
+
+	messageBindings := graph.All(sub, res(_sh+"resultMessage"), nil)
+	for i := range messageBindings {
+		messageLiteral, ok := messageBindings[i].Object.(*rdf2go.Literal)
+		if !ok {
+			return out, errors.New("invalid value (not a literal) in sh:resultMessage: " + messageBindings[i].Object.String())
+		}
+
+		messageVal := messageLiteral
+		messageLang := messageLiteral.Language
+
+		if _, ok := out.message[messageLang]; ok {
+			return out, errors.New("multiple messages of same lang for sh:message")
+		}
+
+		out.message[messageLang] = messageVal
+	}
+
+	severityBinding := graph.All(sub, res(_sh+"resultSeverity"), nil)
+	if len(severityBinding) != 1 {
+		return out, errors.New(fmt.Sprint(" invalid number of sh:resultSeverity tripes: ", len(severityBinding)))
+	}
+	out.severity = severityBinding[0].Object
 
 	return out, nil
 }
@@ -61,94 +166,205 @@ func (v ValidationReport) String() string {
 	_mf := prefixes["mf:"]   // continuing to live dangerously
 	_xsd := prefixes["xsd:"] // continuing to live dangerously
 
-	sb.WriteString(v.testName.String() + "\n")
-	sb.WriteString("\t" + _rdf + "type " + _sht + "Validate ;\n")
-	sb.WriteString("\t" + _rdfs + "label \"" + v.label.String() + "\" ;\n")
-	sb.WriteString("\t" + _mf + "action [\n")
+	if v.testName != nil {
+		sb.WriteString(v.testName.String() + " \n")
+		sb.WriteString("\t<" + _rdf + "type> <" + _sht + "Validate> ;\n")
+		sb.WriteString("\t<" + _rdfs + "label> " + v.label.String() + " ;\n")
+		sb.WriteString("\t<" + _mf + "action> [\n")
 
-	var dg string
-	var sg string
+		var dg string
+		var sg string
 
-	if v.dataGraph.String() == "<http://www.w3.org/ns/shacl>" {
-		dg = "<>"
+		if v.dataGraph.String() == "<http://www.w3.org/ns/shacl>" {
+			dg = "<>"
+		} else {
+			dg = v.dataGraph.String()
+		}
+
+		if v.shapesGraph.String() == "<http://www.w3.org/ns/shacl>" {
+			sg = "<>"
+		} else {
+			sg = v.shapesGraph.String()
+		}
+
+		sb.WriteString("\t\t<" + _sht + "dataGraph> " + dg + " ;\n")
+		sb.WriteString("\t\t<" + _sht + "shapesGraph> " + sg + " ;\n")
+		sb.WriteString("\t] ;\n")
+
+		sb.WriteString("\t<" + _mf + "result> [ \n")
 	} else {
-		dg = v.dataGraph.String()
+		sb.WriteString("[ \n")
 	}
 
-	if v.shapesGraph.String() == "<http://www.w3.org/ns/shacl>" {
-		sg = "<>"
-	} else {
-		sg = v.shapesGraph.String()
-	}
+	sb.WriteString("\t\t<" + _rdf + "type> <" + _sh + "ValidationReport" + "> ;\n")
 
-	sb.WriteString("\t\t" + _sht + "dataGraph " + dg + " ;\n")
-	sb.WriteString("\t\t" + _sht + "shapesGraph " + sg + " ;\n")
-	sb.WriteString("\t] ;\n")
-
-	resTerm := rdf2go.NewLiteralWithDatatype(fmt.Sprint(v.result), res(_xsd+"boolean"))
-	sb.WriteString("\t" + _mf + "result [ \n")
-	sb.WriteString("\t\t" + _rdf + "type " + _sh + "ValidationReport" + " ;\n")
-	sb.WriteString("\t\t" + _sh + "conforms " + resTerm.String() + " ;\n")
+	resTerm := rdf2go.NewLiteralWithDatatype(fmt.Sprint(v.conforms), res(_xsd+"boolean"))
+	sb.WriteString("\t\t<" + _sh + "conforms> " + resTerm.String() + " ;\n")
 
 	for i := range v.results {
 		sb.WriteString(v.results[i].String())
 	}
-	sb.WriteString("\t]; \n")
-	return abbr(sb.String())
+	sb.WriteString("\t] . \n")
+
+	return sb.String()
 }
 
 type ValidationResult struct {
-	focusNode                 string
-	pathName                  string
-	value                     string
-	sourceShape               string
-	sourceConstraintComponent string
-	severity                  string
-	message                   string
-	otherValue                string
+	focusNode                 rdf2go.Term
+	pathName                  PropertyPath
+	value                     rdf2go.Term
+	sourceShape               rdf2go.Term
+	sourceConstraintComponent rdf2go.Term
+	severity                  rdf2go.Term
+	message                   map[string]rdf2go.Term // support language tags
+	otherValue                rdf2go.Term
+	detail                    *ComplexResult
+}
+
+type ComplexResult struct{}
+
+func QuotedString(input string) (out bool) {
+	if len(input) == 0 {
+		return false
+	}
+	firstChar := string(input[0])
+	lastChar := string(input[len(input)-1])
+	if lastChar == firstChar && lastChar == "\"" {
+		out = true
+	}
+	return out
 }
 
 func (vr ValidationResult) String() string {
+	return vr.StringGeneric(false)
+}
+
+func (vr ValidationResult) StringComp() string {
+	return vr.StringGeneric(true)
+}
+
+func (vr ValidationResult) StringGeneric(comparison bool) string {
 	var sb strings.Builder
 
-	sb.WriteString("\t\t" + _sh + "result [\n")
+	sb.WriteString("\t\t<" + _sh + "result> [\n")
 
-	sb.WriteString("\t\t\t" + _rdf + "type " + _sh + "ValidationResult;\n")
-	sb.WriteString(fmt.Sprint("\t\t\t", _sh, "focusNode ", vr.focusNode, "; \n"))
-	if vr.pathName != "" {
-		sb.WriteString(fmt.Sprint("\t\t\t", _sh, "resultPath ", vr.pathName, "; \n"))
+	sb.WriteString("\t\t\t<" + _rdf + "type> <" + _sh + "ValidationResult> ;\n")
+
+	switch vrType := vr.focusNode.(type) {
+	case *rdf2go.Literal:
+		if vrType.Datatype != nil {
+			switch {
+			case vrType.Datatype.RawValue() == _xsd+"string":
+				vrType.Datatype = nil
+				if !QuotedString(vrType.String()) {
+					vrType.Datatype = res(_xsd + "string")
+				}
+
+			case vrType.Datatype.RawValue() == _rdf+"langString":
+				vrType.Datatype = nil
+			}
+		}
+		sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "focusNode> ", vrType, "; \n"))
+	case rdf2go.Literal:
+		if vrType.Datatype != nil {
+			switch {
+			case vrType.Datatype.RawValue() == _xsd+"string":
+				vrType.Datatype = nil
+				if !QuotedString(vrType.String()) {
+					vrType.Datatype = res(_xsd + "string")
+				}
+
+			case vrType.Datatype.RawValue() == _rdf+"langString":
+				vrType.Datatype = nil
+			}
+		}
+		sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "focusNode> ", vrType, "; \n"))
+	default:
+		// fmt.Println("Type is actually: ", reflect.TypeOf(vrType))
+		sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "focusNode> ", vr.focusNode, "; \n"))
 	}
-	if vr.message != "" {
-		sb.WriteString("\t\t\t" + _sh + "resultMessage " + vr.message + " ;\n")
+	// sb.WriteString(fmt.Sprint("\t\t\t", _sh, "focusNode ", vr.focusNode, "; \n"))
+
+	if vr.pathName != nil {
+		sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "resultPath> ", vr.pathName.PropertyRDF(), "; \n"))
 	}
-	if vr.severity == "" {
-		sb.WriteString("\t\t\t" + _sh + "resultSeverity " + _sh + "Violation ;\n")
+
+	for _, v := range vr.message {
+		sb.WriteString("\t\t\t<" + _sh + "resultMessage> " + v.String() + " ;\n")
+	}
+
+	if comparison && vr.otherValue != nil {
+		sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "otherValue> ", vr.otherValue.String(), "; \n"))
+	}
+
+	// if vr.message != "" {
+	// 	sb.WriteString("\t\t\t" + _sh + "resultMessage " + vr.message + " ;\n")
+	// }
+
+	if vr.severity == nil {
+		sb.WriteString("\t\t\t<" + _sh + "resultSeverity> <" + _sh + "Violation> ;\n")
 	} else {
-		sb.WriteString("\t\t\t" + _sh + "resultSeverity " + vr.severity + " ;\n")
+		sb.WriteString("\t\t\t<" + _sh + "resultSeverity> " + vr.severity.String() + " ;\n")
 	}
-	sb.WriteString(fmt.Sprint("\t\t\t", _sh, "sourceConstraintComponent ", vr.sourceConstraintComponent, "; \n"))
-	sb.WriteString(fmt.Sprint("\t\t\t", _sh, "sourceShape ", vr.sourceShape, "; \n"))
-	if vr.value != "" {
-		sb.WriteString(fmt.Sprint("\t\t\t", _sh, "value ", vr.value, "; \n"))
+	sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "sourceConstraintComponent> ", vr.sourceConstraintComponent, "; \n"))
+	sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "sourceShape> ", vr.sourceShape, "; \n"))
+
+	// fmt.Println("In VR Stringer ", vr.sourceShape)
+	if vr.value != nil {
+		switch vrType := vr.value.(type) {
+		case *rdf2go.BlankNode, rdf2go.BlankNode:
+			sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "value> ", vr.value, "; \n"))
+		case *rdf2go.Literal:
+			if vrType.Datatype != nil {
+				switch {
+				case vrType.Datatype.RawValue() == _xsd+"string":
+					vrType.Datatype = nil
+					if !QuotedString(vrType.String()) {
+						vrType.Datatype = res(_xsd + "string")
+					}
+
+				case vrType.Datatype.RawValue() == _rdf+"langString":
+					vrType.Datatype = nil
+				}
+			}
+			sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "value> ", vrType, "; \n"))
+		case rdf2go.Literal:
+			if vrType.Datatype != nil {
+				switch {
+				case vrType.Datatype.RawValue() == _xsd+"string":
+					vrType.Datatype = nil
+					if !QuotedString(vrType.String()) {
+						vrType.Datatype = res(_xsd + "string")
+					}
+
+				case vrType.Datatype.RawValue() == _rdf+"langString":
+					vrType.Datatype = nil
+				}
+			}
+			sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "value> ", vrType, "; \n"))
+		default:
+			// fmt.Println("Type is actually: ", reflect.TypeOf(vrType))
+			sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "value> ", vr.value, "; \n"))
+		}
 	}
 	sb.WriteString("\t\t]; \n")
 
-	return abbr(sb.String())
+	return sb.String()
 }
 
 // Constraint are used for validation, to allow checking if individual constraints are satisfied
 type Constraint interface {
-	SparqlCheck(ep endpoint, obj, path, shapeName string, target SparqlQueryFlat) (bool, []ValidationResult)
+	SparqlCheck(ep endpoint, obj string, path PropertyPath, shapeName rdf2go.Term, target SparqlQueryFlat) (bool, []ValidationResult)
 }
 
 type ConstraintInstantiation struct {
 	constraint Constraint
 	obj        string
-	path       string
-	shapeName  string
+	path       PropertyPath
+	shapeName  rdf2go.Term
 	targets    []TargetExpression
-	severity   string
-	message    string // TODO add support for multiple language tags; map[string]string
+	severity   rdf2go.Term
+	message    map[string]rdf2go.Term
 }
 
 func (c ConstraintInstantiation) SparqlCheck(ep endpoint) (allValid bool, out []ValidationResult) {
@@ -173,7 +389,7 @@ func (c ConstraintInstantiation) SparqlCheck(ep endpoint) (allValid bool, out []
 		out[i].severity = c.severity
 	}
 
-	// out = removeDuplicate(out)
+	out = removeDuplicateVR(out)
 
 	return allValid, out
 }
@@ -199,9 +415,28 @@ func (s *ShaclDocument) GetShape(graph *rdf2go.Graph, term rdf2go.Term) (shape S
 // even before they are defined. Via lazy dereferencing, we can easily parse these
 // and get the pointer to an actual shape at time of translation to Sparql
 type ShapeRef struct {
+	doc      *ShaclDocument
 	name     string //
 	ref      Shape
 	negative bool // if true, then the reference is on the negation of this shape
+}
+
+func (s ShapeRef) GetLogName() string {
+	if s.ref != nil {
+		return s.ref.GetLogName()
+	} else {
+		shape := s.doc.shapeNames[s.name]
+		return shape.GetLogName()
+	}
+}
+
+func (s ShapeRef) GetQualName() string {
+	if s.ref != nil {
+		return s.ref.GetQualName()
+	} else {
+		shape := s.doc.shapeNames[s.name]
+		return shape.GetQualName()
+	}
 }
 
 func (s ShapeRef) IsBlank() bool {
@@ -279,7 +514,7 @@ type ValueTypeConstraint struct {
 	id   int64       // used to create unique references in Sparql translation
 }
 
-func (v ValueTypeConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, target SparqlQueryFlat) (res bool, reports []ValidationResult) {
+func (v ValueTypeConstraint) SparqlCheck(ep endpoint, obj string, path PropertyPath, shapeNames rdf2go.Term, target SparqlQueryFlat) (result bool, reports []ValidationResult) {
 	// focusNode = obj
 	// path = path
 	// value .. must be extracted from query
@@ -291,7 +526,7 @@ func (v ValueTypeConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames stri
 	// fmt.Println("||||||||||||||||||||||||||||||||||||")
 
 	targetLine := fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}")
-	res = true
+	result = true
 	body := v.SparqlBodyValidation(obj, path)
 	uniqObj := fmt.Sprint(obj, v.id)
 	var header []string
@@ -305,10 +540,11 @@ func (v ValueTypeConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames stri
 	}
 
 	checkQuery := SparqlQuery{
-		head:  header,
-		body:  []string{targetLine, body},
-		group: []string{},
-		graph: ep.GetGraph(),
+		head:   header,
+		target: targetLine,
+		body:   []string{body},
+		group:  []string{},
+		graph:  ep.GetGraph(),
 	}
 
 	table := ep.Query(checkQuery)
@@ -319,33 +555,34 @@ func (v ValueTypeConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames stri
 		var report ValidationResult
 		// row := table.content[i]
 
-		report.focusNode = row[0].String()
+		report.focusNode = row[0]
 		report.pathName = path
 		report.sourceShape = shapeNames
+		// fmt.Println("SparqlCHeck VT: ", shapeNames)
 
 		switch v.vt {
 		case class:
-			report.sourceConstraintComponent = "sh:ClassConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "ClassConstraintComponent")
 		case nodeKind:
-			report.sourceConstraintComponent = "sh:NodeKindConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "NodeKindConstraintComponent")
 		case datatype:
-			report.sourceConstraintComponent = "sh:DatatypeConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "DatatypeConstraintComponent")
 		}
 
 		if focusNodeisValueNode {
 			report.value = report.focusNode
 		} else {
-			report.value = row[1].String()
+			report.value = row[1]
 		}
 
 		reports = append(reports, report)
-		res = false
+		result = false
 		// if focusNodeisValueNode {
 		// 	break // stop after the first hit in this case
 		// }
 	}
 
-	return res, reports
+	return result, reports
 }
 
 func (v ValueTypeConstraint) String() string {
@@ -358,15 +595,14 @@ func (v ValueTypeConstraint) String() string {
 	return _sh + "datatype " + v.term.String()
 }
 
-func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
+func (v ValueTypeConstraint) SparqlBody(obj string, path PropertyPath) (out string) {
 	// uniqObj := obj + strconv.Itoa(int(v.vt)) + v.term.RawValue()
 	uniqObj := fmt.Sprint(obj, v.id)
 	switch v.vt {
 	case class: // UNIVERSAL PROPERTY
 
-		if path != "" { // PROPERTY SHAPE
-
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj,
+		if path != nil { // PROPERTY SHAPE
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj,
 				" . FILTER NOT EXISTS {", uniqObj, " rdf:type/rdfs:subClassOf* ",
 				v.term.String(), "} . }.")
 		} else { // NODE SHAPE
@@ -374,7 +610,7 @@ func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
 		}
 
 	case nodeKind: // UNIVERSAL PROPERTY
-		if path != "" { // PROPERTY SHAPE
+		if path != nil { // PROPERTY SHAPE
 
 			inner := ""
 			switch v.term.RawValue() {
@@ -392,7 +628,7 @@ func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
 				inner = "FILTER ( !isBlank(" + uniqObj + ") && !isLiteral(" + uniqObj + ") ) ."
 			}
 
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 
 		} else { // NODE SHAPE
 			switch v.term.RawValue() {
@@ -414,7 +650,7 @@ func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
 	case datatype: // UNIVERSAL PROPERTY
 
 		if RecognisedDatatype(v.term) { // recognised data type
-			if path != "" {
+			if path != nil {
 				b4 := fmt.Sprint("( (datatype(", uniqObj, ") = xsd:string ) || (datatype(", uniqObj, ") != ", v.term.String(), " )) ||")
 				if v.term.RawValue() == _xsd+"string" {
 					b4 = ""
@@ -422,7 +658,7 @@ func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
 				// inner := "FILTER ( datatype( " + uniqObj + ") != " + v.term.RawValue() + " ) ."
 				inner := fmt.Sprint("FILTER ( ", b4, " ", v.term.String(), "(str(", uniqObj, ")) != ", uniqObj, " ) .")
 
-				out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+				out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 			} else {
 				b4 := fmt.Sprint("( (datatype(", obj, ") = xsd:string ) || (datatype(", obj, ") = ", v.term.String(), " )) &&")
 				if v.term.RawValue() == _xsd+"string" {
@@ -432,11 +668,11 @@ func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
 				out = fmt.Sprint("FILTER ( ", b4, " ", v.term.String(), "(str(", obj, ")) = ", obj, " ) .")
 			}
 		} else {
-			if path != "" {
+			if path != nil {
 				inner := "FILTER ( datatype( " + uniqObj + ") != " + v.term.String() + " ) ."
 				// inner := fmt.Sprint("FILTER ( ", v.term.String(), "(str(", uniqObj, ")) != ", obj, " ) .")
 
-				out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+				out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 			} else {
 				out = "FILTER (     datatype( " + obj + ") = " + v.term.String() + " ) ."
 				// out = fmt.Sprint("FILTER ( ", v.term.String(), "(str(", obj, ")) = ", obj, " ) .")
@@ -448,14 +684,14 @@ func (v ValueTypeConstraint) SparqlBody(obj, path string) (out string) {
 	return out
 }
 
-func (v ValueTypeConstraint) SparqlBodyValidation(obj, path string) (out string) {
+func (v ValueTypeConstraint) SparqlBodyValidation(obj string, path PropertyPath) (out string) {
 	// uniqObj := obj + strconv.Itoa(int(v.vt)) + v.term.RawValue()
 	uniqObj := fmt.Sprint(obj, v.id)
 	switch v.vt {
 	case class: // UNIVERSAL PROPERTY
 
-		if path != "" { // PROPERTY SHAPE
-			out = fmt.Sprint("?sub ", path, " ", uniqObj,
+		if path != nil { // PROPERTY SHAPE
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj,
 				" . FILTER NOT EXISTS {", uniqObj, " rdf:type/rdfs:subClassOf* ",
 				v.term.String(), "} . ")
 		} else { // NODE SHAPE
@@ -463,7 +699,7 @@ func (v ValueTypeConstraint) SparqlBodyValidation(obj, path string) (out string)
 		}
 
 	case nodeKind: // UNIVERSAL PROPERTY
-		if path != "" { // PROPERTY SHAPE
+		if path != nil { // PROPERTY SHAPE
 
 			inner := ""
 			switch v.term.RawValue() {
@@ -481,7 +717,7 @@ func (v ValueTypeConstraint) SparqlBodyValidation(obj, path string) (out string)
 				inner = "FILTER ( !isBlank(" + uniqObj + ") && !isLiteral(" + uniqObj + ")) ."
 			}
 
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 
 		} else { // NODE SHAPE
 			switch v.term.RawValue() {
@@ -504,7 +740,7 @@ func (v ValueTypeConstraint) SparqlBodyValidation(obj, path string) (out string)
 
 		if RecognisedDatatype(v.term) { //  recognised data types
 
-			if path != "" {
+			if path != nil {
 				var inner string
 				if v.term.RawValue() == _xsd+"string" {
 					inner = "FILTER ( datatype( " + uniqObj + ") != " + v.term.String() + " ) ."
@@ -516,7 +752,7 @@ func (v ValueTypeConstraint) SparqlBodyValidation(obj, path string) (out string)
 					inner = b4 + fmt.Sprint("FILTER ( ", b4b4, " !BOUND(?OfType", v.id, ")).")
 				}
 
-				out = fmt.Sprint(" ?sub ", path, " ", uniqObj, " . ", inner)
+				out = fmt.Sprint(" ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 			} else {
 				if v.term.RawValue() == _xsd+"string" {
 					out = "FILTER ( !isLiteral(" + obj + ") ||  datatype( " + obj + ") != " + v.term.String() + " ) ."
@@ -527,13 +763,13 @@ func (v ValueTypeConstraint) SparqlBodyValidation(obj, path string) (out string)
 				}
 			}
 		} else {
-			if path != "" {
+			if path != nil {
 				// b4 := fmt.Sprint("BIND (", v.term.String(), "(str(", uniqObj, ")) AS ?OfType", v.id, " ).\n")
 
 				inner := "FILTER ( !isLiteral(" + uniqObj + ") || datatype( " + uniqObj + ") != " + v.term.String() + " ) ."
 				// inner := fmt.Sprint("FILTER ( !BOUND(?OfType", v.id, ")).")
 
-				out = fmt.Sprint(" ?sub ", path, " ", uniqObj, " . ", inner)
+				out = fmt.Sprint(" ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 			} else {
 				// b4 := fmt.Sprint("BIND (", v.term.String(), "(str(", obj, ")) AS ?OfType", v.id, " ).\n")
 				out = "FILTER ( !isLiteral(" + obj + ") ||  datatype( " + obj + ") != " + v.term.String() + " ) ."
@@ -604,7 +840,7 @@ func (v ValueRangeConstraint) GetSubConstraints() []Constraint {
 	return []Constraint{}
 }
 
-func (v ValueRangeConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, target SparqlQueryFlat) (res bool, reports []ValidationResult) {
+func (v ValueRangeConstraint) SparqlCheck(ep endpoint, obj string, path PropertyPath, shapeNames rdf2go.Term, target SparqlQueryFlat) (result bool, reports []ValidationResult) {
 	// focusNode = obj
 	// path = path
 	// value .. must be extracted from query
@@ -612,7 +848,7 @@ func (v ValueRangeConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames str
 	// sourceConstraintComponent .. known
 
 	targetLine := fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}")
-	res = true
+	result = true
 	body := v.SparqlBodyValidation(obj, path)
 	uniqObj := fmt.Sprint(obj, v.id)
 	var header []string
@@ -626,10 +862,11 @@ func (v ValueRangeConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames str
 	}
 
 	checkQuery := SparqlQuery{
-		head:  header,
-		body:  []string{targetLine, body},
-		group: []string{},
-		graph: ep.GetGraph(),
+		head:   header,
+		target: targetLine,
+		body:   []string{body},
+		group:  []string{},
+		graph:  ep.GetGraph(),
 	}
 
 	table := ep.Query(checkQuery)
@@ -640,69 +877,69 @@ func (v ValueRangeConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames str
 		var report ValidationResult
 		// row := table.content[i]
 
-		report.focusNode = row[0].String()
+		report.focusNode = row[0]
 		report.pathName = path
 		report.sourceShape = shapeNames
 
 		switch v.vr {
 		case minExcl:
-			report.sourceConstraintComponent = "sh:MinExclusiveConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "MinExclusiveConstraintComponent")
 		case maxExcl:
-			report.sourceConstraintComponent = "sh:MaxExclusiveConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "MaxExclusiveConstraintComponent")
 		case minIncl:
-			report.sourceConstraintComponent = "sh:MinInclusiveConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "MinInclusiveConstraintComponent")
 		case maxInclu:
-			report.sourceConstraintComponent = "sh:MaxInclusiveConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "MaxInclusiveConstraintComponent")
 		}
 
 		if focusNodeisValueNode {
 			report.value = report.focusNode
 		} else {
-			report.value = row[1].String()
+			report.value = row[1]
 		}
 
 		reports = append(reports, report)
-		res = false
+		result = false
 		// if focusNodeisValueNode {
 		// 	break // stop after the first hit in this case
 		// }
 	}
 
-	return res, reports
+	return result, reports
 }
 
-func (v ValueRangeConstraint) SparqlBody(obj, path string) (out string) {
+func (v ValueRangeConstraint) SparqlBody(obj string, path PropertyPath) (out string) {
 	// uniqObj := obj + strconv.Itoa(int(v.vr)) + strconv.Itoa(v.value)
 	uniqObj := fmt.Sprint(obj, v.id)
 
 	switch v.vr {
 	case minExcl: // UNIVERSAL PROPERTY
-		if path != "" {
+		if path != nil {
 			inner := fmt.Sprint("BIND( ", v.value, " < ", uniqObj, "  AS ?result", v.id, " ) . FILTER ( !bound(?result", v.id, ") || !(?result", v.id, " )) .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else {
 			out = fmt.Sprint("FILTER ( ", v.value, " < ", obj, ") .")
 		}
 	case maxExcl: // UNIVERSAL PROPERTY
-		if path != "" {
+		if path != nil {
 			inner := fmt.Sprint("BIND( ", v.value, " > ", uniqObj, "  AS ?result", v.id, " ) . FILTER ( !bound(?result", v.id, ") || !(?result", v.id, " )) .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else {
 			out = fmt.Sprint("FILTER ( ", v.value, " > ", obj, ") .")
 		}
 	case minIncl: // UNIVERSAL PROPERTY
-		if path != "" {
+		if path != nil {
 			inner := fmt.Sprint("BIND( ", v.value, " <= ", uniqObj, "  AS ?result", v.id, " ) . FILTER ( !bound(?result", v.id, ") || !(?result", v.id, " )) .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else {
 			out = fmt.Sprint("FILTER ( ", v.value, " <= ", obj, ") .")
 		}
 
 	case maxInclu: // UNIVERSAL PROPERTY
 
-		if path != "" {
+		if path != nil {
 			inner := fmt.Sprint("BIND( ", v.value, " >= ", uniqObj, "  AS ?result", v.id, " ) . FILTER ( !bound(?result", v.id, ") || !(?result", v.id, " )) .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else {
 			out = fmt.Sprint("FILTER ( ", v.value, " >= ", obj, ") .")
 		}
@@ -711,13 +948,13 @@ func (v ValueRangeConstraint) SparqlBody(obj, path string) (out string) {
 	return out
 }
 
-func (v ValueRangeConstraint) SparqlBodyValidation(obj, path string) (out string) {
+func (v ValueRangeConstraint) SparqlBodyValidation(obj string, path PropertyPath) (out string) {
 	// uniqObj := obj + strconv.Itoa(int(v.vt)) + v.term.RawValue()
 	uniqObj := fmt.Sprint(obj, v.id)
 
 	var b4 string
 
-	if path != "" {
+	if path != nil {
 		b4 = fmt.Sprint("BIND ((", uniqObj, ") > (", v.value, ") AS ?IsNum", v.id, " ).\n")
 	} else {
 		b4 = fmt.Sprint("BIND ((", obj, ") > (", v.value, ") AS ?IsNum", v.id, " ).\n")
@@ -725,32 +962,32 @@ func (v ValueRangeConstraint) SparqlBodyValidation(obj, path string) (out string
 
 	switch v.vr {
 	case minExcl: // UNIVERSAL PROPERTY
-		if path != "" {
+		if path != nil {
 			inner := b4 + fmt.Sprint("FILTER ( !BOUND(?IsNum", v.id, ") || ", v.value, " >= ", uniqObj, ") .")
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else {
 			out = b4 + fmt.Sprint("FILTER ( !BOUND(?IsNum", v.id, ") || ", v.value, " >= ", obj, ") .")
 		}
 	case maxExcl: // UNIVERSAL PROPERTY
-		if path != "" {
+		if path != nil {
 			inner := b4 + fmt.Sprint("FILTER ( !BOUND(?IsNum", v.id, ") ||  ", v.value, " <= ", uniqObj, ") .")
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else {
 			out = b4 + fmt.Sprint("FILTER ( !BOUND(?IsNum", v.id, ") ||  ", v.value, " <= ", obj, ") .")
 		}
 	case minIncl: // UNIVERSAL PROPERTY
-		if path != "" {
+		if path != nil {
 			inner := b4 + fmt.Sprint("FILTER ( !BOUND(?IsNum", v.id, ") ||  ", v.value, " > ", uniqObj, ") .")
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else {
 			out = b4 + fmt.Sprint("FILTER ( !BOUND(?IsNum", v.id, ") ||   ", v.value, " > ", obj, ") .")
 		}
 
 	case maxInclu: // UNIVERSAL PROPERTY
 
-		if path != "" {
+		if path != nil {
 			inner := b4 + fmt.Sprint("FILTER ( !BOUND(?IsNum", v.id, ") ||  ", v.value, " < ", uniqObj, ") .")
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else {
 			out = b4 + fmt.Sprint("FILTER ( !BOUND(?IsNum", v.id, ") ||  ", v.value, " < ", obj, ") .")
 		}
@@ -803,7 +1040,7 @@ func (v StringBasedConstraint) GetSubConstraints() []Constraint {
 	return []Constraint{}
 }
 
-func (v StringBasedConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, target SparqlQueryFlat) (res bool, reports []ValidationResult) {
+func (v StringBasedConstraint) SparqlCheck(ep endpoint, obj string, path PropertyPath, shapeNames rdf2go.Term, target SparqlQueryFlat) (result bool, reports []ValidationResult) {
 	// focusNode = obj
 	// path = path
 	// value .. must be extracted from query
@@ -817,7 +1054,7 @@ func (v StringBasedConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames st
 	}
 
 	targetLine := fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}")
-	res = true
+	result = true
 	body := v.SparqlBodyValidation(obj, path)
 	uniqObj := fmt.Sprint(obj, v.id)
 	var header []string
@@ -833,10 +1070,11 @@ func (v StringBasedConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames st
 	}
 
 	checkQuery := SparqlQuery{
-		head:  header,
-		body:  []string{targetLine, body},
-		group: []string{},
-		graph: ep.GetGraph(),
+		head:   header,
+		target: targetLine,
+		body:   []string{body},
+		group:  []string{},
+		graph:  ep.GetGraph(),
 	}
 
 	table := ep.Query(checkQuery)
@@ -846,39 +1084,39 @@ func (v StringBasedConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames st
 		var report ValidationResult
 		// row := table.content[i]
 
-		report.focusNode = row[0].String()
+		report.focusNode = row[0]
 		report.pathName = path
 		report.sourceShape = shapeNames
 
 		switch v.sb {
 		case minLen:
-			report.sourceConstraintComponent = "sh:MinLengthConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "MinLengthConstraintComponent")
 		case maxLen:
-			report.sourceConstraintComponent = "sh:MaxLengthConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "MaxLengthConstraintComponent")
 		case pattern:
-			report.sourceConstraintComponent = "sh:PatternConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "PatternConstraintComponent")
 		case langIn:
-			report.sourceConstraintComponent = "sh:LanguageInConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "LanguageInConstraintComponent")
 		case uniqLang:
-			report.sourceConstraintComponent = "sh:UniqueLangConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "UniqueLangConstraintComponent")
 		}
 
 		if focusNodeisValueNode {
 			report.value = report.focusNode
 		} else if uniqLangCase {
-			report.otherValue = row[1].String()
+			report.otherValue = row[1]
 		} else {
-			report.value = row[1].String()
+			report.value = row[1]
 		}
 
 		reports = append(reports, report)
-		res = false
+		result = false
 		// if focusNodeisValueNode {
 		// 	break // stop after the first hit in this case
 		// }
 	}
 
-	return res, reports
+	return result, reports
 }
 
 func (v StringBasedConstraint) String() string {
@@ -895,30 +1133,30 @@ func (v StringBasedConstraint) String() string {
 	return fmt.Sprint(_sh, "uniqueLang ", v.uniqueLang)
 }
 
-func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
+func (v StringBasedConstraint) SparqlBody(obj string, path PropertyPath) (out string) {
 	// uniqObj := obj + strconv.Itoa(int(v.sb)) + strconv.Itoa(v.length) + v.pattern + v.flags
 	uniqObj := fmt.Sprint(obj, v.id)
 
 	switch v.sb {
 	case minLen: // UNIVERSAL PROPERTY
-		if path != "" { // PROPERTY SHAPE
+		if path != nil { // PROPERTY SHAPE
 			inner := fmt.Sprint("FILTER (STRLEN(str(", uniqObj, ")) < ", v.length, ") .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else { // NODE SHAPE
 			out = fmt.Sprint("FILTER (STRLEN(str(", obj, ")) >= ", v.length, ") .")
 		}
 	case maxLen: // UNIVERSAL PROPERTY
 
-		if path != "" { // PROPERTY SHAPE
+		if path != nil { // PROPERTY SHAPE
 			inner := fmt.Sprint("FILTER (STRLEN(str(", uniqObj, ")) > ", v.length, ") .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else { // NODE SHAPE
 			out = fmt.Sprint("FILTER (STRLEN(str(", obj, ")) <= ", v.length, ") .")
 		}
 
 	case pattern: // UNIVERSAL PROPERTY
 		// v.pattern = strings.ReplaceAll(v.pattern, "\\", "\\\\")
-		if path != "" {
+		if path != nil {
 			inner := ""
 			if len(v.flags) != 0 {
 				inner = fmt.Sprint("FILTER (isBlank(" + uniqObj + ") || !regex(str(" + uniqObj + "), " + v.pattern + ", " + v.flags + ") )")
@@ -926,7 +1164,7 @@ func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
 				inner = fmt.Sprint("FILTER (isBlank(" + uniqObj + ") || !regex(str(" + uniqObj + "), " + v.pattern + ") )")
 			}
 
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else {
 			if len(v.flags) != 0 {
 				out = fmt.Sprint("FILTER (!isBlank(" + obj + ") && regex(str(" + obj + "), " + v.pattern + ", " + v.flags + ") )")
@@ -936,7 +1174,7 @@ func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
 		}
 	case langIn: // Universal Property
 
-		if path != "" { // Property Shape
+		if path != nil { // Property Shape
 
 			var langChecks []string
 
@@ -944,7 +1182,7 @@ func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
 				langChecks = append(langChecks, fmt.Sprint("langMatches(lang(", uniqObj, "),", v.langs[i], ")"))
 			}
 			inner := fmt.Sprint("FILTER (  ", strings.Join(langChecks, " || "), " ) .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else { // Node Shape
 
 			var langChecks []string
@@ -957,16 +1195,16 @@ func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
 		}
 	case uniqLang: // Universal Property
 
-		if path != "" { // Property Shape
+		if path != nil { // Property Shape
 
 			innerInner := fmt.Sprint(
 				"BIND(lang(", uniqObj, ") AS ?lang1", v.id, "). ",
 				"BIND(lang(", uniqObj, "B) AS ?lang2", v.id, ").",
 				"FILTER ( ", uniqObj, " != ", uniqObj, "B && ?lang2", v.id, " = ?lang1", v.id, " && ?lang1", v.id, " != \"\").")
 
-			inner := fmt.Sprint(" ?sub ", path, " ", uniqObj, "B .", innerInner)
+			inner := fmt.Sprint(" ?sub ", path.PropertyString(), " ", uniqObj, "B .", innerInner)
 
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else {
 			out = "" // nothing to do for NodeShape, since it cannot violate this constraint
 		}
@@ -976,30 +1214,30 @@ func (v StringBasedConstraint) SparqlBody(obj, path string) (out string) {
 	return out
 }
 
-func (v StringBasedConstraint) SparqlBodyValidation(obj, path string) (out string) {
+func (v StringBasedConstraint) SparqlBodyValidation(obj string, path PropertyPath) (out string) {
 	// uniqObj := obj + strconv.Itoa(int(v.sb)) + strconv.Itoa(v.length) + v.pattern + v.flags
 	uniqObj := fmt.Sprint(obj, v.id)
 
 	switch v.sb {
 	case minLen: // UNIVERSAL PROPERTY
-		if path != "" { // PROPERTY SHAPE
+		if path != nil { // PROPERTY SHAPE
 			inner := fmt.Sprint("FILTER ( isBlank(", uniqObj, ") || STRLEN(str(", uniqObj, ")) < ", v.length, ") .")
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else { // NODE SHAPE
 			out = fmt.Sprint("FILTER ( isBlank(", obj, ")  || STRLEN(str(", obj, ")) < ", v.length, ") .")
 		}
 	case maxLen: // UNIVERSAL PROPERTY
 
-		if path != "" { // PROPERTY SHAPE
+		if path != nil { // PROPERTY SHAPE
 			inner := fmt.Sprint("FILTER ( isBlank(", uniqObj, ") || STRLEN(str(", uniqObj, ")) > ", v.length, ") .")
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else { // NODE SHAPE
 			out = fmt.Sprint("FILTER ( isBlank(", obj, ") || STRLEN(str(", obj, ")) > ", v.length, ") .")
 		}
 
 	case pattern: // UNIVERSAL PROPERTY
 		// v.pattern = strings.ReplaceAll(v.pattern, "\\", "\\\\")
-		if path != "" {
+		if path != nil {
 			inner := ""
 			if len(v.flags) != 0 {
 				inner = fmt.Sprint("FILTER (isBlank(" + uniqObj + ") || !regex(str(" + uniqObj + "), " + v.pattern + ", " + v.flags + ") )")
@@ -1007,7 +1245,7 @@ func (v StringBasedConstraint) SparqlBodyValidation(obj, path string) (out strin
 				inner = fmt.Sprint("FILTER (isBlank(" + uniqObj + ") || !regex(str(" + uniqObj + "), " + v.pattern + ") )")
 			}
 
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else {
 			if len(v.flags) != 0 {
 				out = fmt.Sprint("FILTER (isBlank(" + obj + ") || !regex(str(" + obj + "), " + v.pattern + ", " + v.flags + ") )")
@@ -1017,7 +1255,7 @@ func (v StringBasedConstraint) SparqlBodyValidation(obj, path string) (out strin
 		}
 	case langIn: // Universal Propety
 
-		if path != "" { // Property Shape
+		if path != nil { // Property Shape
 
 			var langChecks []string
 
@@ -1027,7 +1265,7 @@ func (v StringBasedConstraint) SparqlBodyValidation(obj, path string) (out strin
 
 			b4 := fmt.Sprint("BIND (lang(", uniqObj, ") AS ?lang", v.id, ").\n")
 			inner := b4 + fmt.Sprint("FILTER ( !bound(?lang", v.id, ") || ", strings.Join(langChecks, " && "), "  ) .")
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else { // Node Shape
 
 			var langChecks []string
@@ -1040,15 +1278,15 @@ func (v StringBasedConstraint) SparqlBodyValidation(obj, path string) (out strin
 			out = b4 + fmt.Sprint("FILTER ( !bound(?lang", v.id, ") || ", strings.Join(langChecks, " &&"), "  ) .")
 		}
 	case uniqLang:
-		if path != "" { // Property Shape
+		if path != nil { // Property Shape
 			innerInner := fmt.Sprint(
 				"BIND(lang(", uniqObj, ") AS ?lang1", v.id, "). ",
 				"BIND(lang(", uniqObj, "B) AS ?lang2", v.id, ").",
 				"FILTER ( ", uniqObj, " != ", uniqObj, "B && ?lang2", v.id, " = ?lang1", v.id, " && ?lang1", v.id, " != \"\").")
 
-			inner := fmt.Sprint(" ?sub ", path, " ", uniqObj, "B .", innerInner)
+			inner := fmt.Sprint(" ?sub ", path.PropertyString(), " ", uniqObj, "B .", innerInner)
 
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		}
 	}
 
@@ -1127,14 +1365,14 @@ func ExtractStringBasedConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (o
 
 		if !foundFirst && !foundRest && !foundNil {
 			// log.Panicln("Invalid languageIn Constraint structure in graph")
-			return out, errors.New(fmt.Sprint("Invalid languageIn Constraint structure in graph"))
+			return out, errors.New("invalid languageIn Constraint structure in graph")
 		}
 
 		out.id = id
 		out.sb = langIn
 	default:
 		// log.Panicln()
-		return out, errors.New(fmt.Sprint("Triple is not proper value range constr. ", triple))
+		return out, errors.New(fmt.Sprint("triple is not proper value range constr. ", triple))
 	}
 
 	return out, nil
@@ -1159,7 +1397,7 @@ func (v PropertyPairConstraint) GetSubConstraints() []Constraint {
 	return []Constraint{}
 }
 
-func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, target SparqlQueryFlat) (res bool, reports []ValidationResult) {
+func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj string, path PropertyPath, shapeNames rdf2go.Term, target SparqlQueryFlat) (result bool, reports []ValidationResult) {
 	// focusNode = obj
 	// path = path
 	// value .. must be extracted from query
@@ -1176,12 +1414,12 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames s
 	}
 
 	targetLine := fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}")
-	res = true
+	result = true
 	body := v.SparqlBodyValidation(obj, path)
 	uniqObj := fmt.Sprint(obj, v.id)
 	var header []string
 
-	if path == "" {
+	if path == nil {
 		header = []string{"?sub", uniqObj} // only consider equals and disjoint
 	} else {
 		if inEqualsCase {
@@ -1194,10 +1432,11 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames s
 	}
 
 	checkQuery := SparqlQuery{
-		head:  header,
-		body:  []string{targetLine, body},
-		group: []string{},
-		graph: ep.GetGraph(),
+		head:   header,
+		target: targetLine,
+		body:   []string{body},
+		group:  []string{},
+		graph:  ep.GetGraph(),
 	}
 
 	table := ep.Query(checkQuery)
@@ -1207,84 +1446,84 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames s
 		var report ValidationResult
 		// row := table.content[i]
 
-		report.focusNode = row[0].String()
+		report.focusNode = row[0]
 		report.pathName = path
 		report.sourceShape = shapeNames
 
 		switch v.pp {
 		case equals:
-			report.sourceConstraintComponent = "sh:EqualsConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "EqualsConstraintComponent")
 		case disjoint:
-			report.sourceConstraintComponent = "sh:DisjointConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "DisjointConstraintComponent")
 		case lessThan:
-			report.sourceConstraintComponent = "sh:LessThanConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "LessThanConstraintComponent")
 		case lessThanOrEquals:
-			report.sourceConstraintComponent = "sh:LessThanOrEqualsConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "LessThanOrEqualsConstraintComponent")
 		}
 
-		if inEqualsCase && path != "" {
+		if inEqualsCase && path != nil {
 
 			var haveValueA bool
 			var haveValueB bool
 
 			// check if current value node already Reported
-			var nodeToCheckA string
-			var nodeToCheckB string
+			var nodeToCheckA rdf2go.Term
+			var nodeToCheckB rdf2go.Term
 
 			_, ok := row[1].(rdf2go.BlankNode)
 			if !ok {
 				haveValueA = true
-				nodeToCheckA = row[1].String()
+				nodeToCheckA = row[1]
 			}
 
 			_, ok = row[2].(rdf2go.BlankNode)
 			if !ok {
 				haveValueB = true
-				nodeToCheckB = row[2].String()
+				nodeToCheckB = row[2]
 			}
 
 			if haveValueA {
-				var reportA ValidationResult = report
+				reportA := report
 				reportA.value = nodeToCheckA
 				reports = append(reports, reportA)
 			}
 
 			if haveValueB {
-				var reportB ValidationResult = report
+				reportB := report
 				reportB.value = nodeToCheckB
 				reports = append(reports, reportB)
 			}
 
-			res = !(haveValueA || haveValueB)
+			result = !haveValueA && !haveValueB
 
-		} else if inEqualsCase && path == "" {
+		} else if inEqualsCase && path == nil {
 
-			var nodeToCheck string
+			var nodeToCheck rdf2go.Term
 
 			_, ok := row[1].(rdf2go.BlankNode)
 			if ok {
 				nodeToCheck = report.focusNode
 			} else {
-				nodeToCheck = row[1].String()
+				nodeToCheck = row[1]
 			}
 
 			report.value = nodeToCheck
 			reports = append(reports, report)
-			res = false
+			result = false
 		} else {
-			report.value = row[1].String()
+			report.value = row[1]
 
 			if lessThanCase {
-				report.otherValue = row[2].String()
+				report.otherValue = row[2]
 			}
 
 			reports = append(reports, report)
-			res = false
+			result = false
 		}
 
 	}
 
-	return res, reports
+	return result, reports
 }
 
 func (v PropertyPairConstraint) String() string {
@@ -1303,18 +1542,18 @@ func (v PropertyPairConstraint) String() string {
 // to capture the meaning of the corresponding SHACL constraint. obj provides the object to be
 // constrained, this will differ between node and property shapes, and path  is non-empty if
 // called by a property shape.
-func (v PropertyPairConstraint) SparqlBody(obj, path string) (out string) {
+func (v PropertyPairConstraint) SparqlBody(obj string, path PropertyPath) (out string) {
 	// uniqObj := obj + strconv.Itoa(int(v.pp)) + v.term.RawValue()
 	uniqObj := fmt.Sprint(obj, v.id)
 
 	switch v.pp {
 	case equals: // Universal Property: set equality between value nodes and objects reachable via equals
 		other := v.term.String()
-		if path != "" {
+		if path != nil {
 
 			// implemented via two not exists: one testing that A ⊆ B and another testing B ⊆ A
-			out1 := fmt.Sprint("FILTER NOT EXISTS { ?sub ", other, " ", uniqObj, "A . FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, "A .} . } .\n")
-			out2 := fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, "B . FILTER NOT EXISTS { ?sub ", other, " ", uniqObj, "B .} . } .")
+			out1 := fmt.Sprint("FILTER NOT EXISTS { ?sub ", other, " ", uniqObj, "A . FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, "A .} . } .\n")
+			out2 := fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, "B . FILTER NOT EXISTS { ?sub ", other, " ", uniqObj, "B .} . } .")
 			out = out1 + out2
 		} else {
 			b4 := fmt.Sprint(obj, " ", other, " ", obj, ". ")
@@ -1323,47 +1562,47 @@ func (v PropertyPairConstraint) SparqlBody(obj, path string) (out string) {
 
 	case disjoint: // Universal Property: set of value nodes and those reachable by disjoint must be distinct
 		other := v.term.String()
-		if path != "" {
+		if path != nil {
 			// implemented via one exists: one testing that A∩B = ∅
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ?sub ", other, " ", uniqObj, " . } .")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ?sub ", other, " ", uniqObj, " . } .")
 		} else { // NON-STANDARD: implementing this since the Test Suite supports it (for some reason)
 			out = fmt.Sprint("FILTER NOT EXISTS { ", obj, " ", other, " ", uniqObj, " . FILTER ( ", obj, " = ", uniqObj, ") .  } .")
 		}
 
 	case lessThan: // Universal: there is no value node with value higher or equal than those reachable by lessThan
-		// if path == "" {
+		// if path == nil {
 		// 	log.Panicln("Standard Violating and unsupported use of sh:lessThan inside  NodeShapde.")
 		// }
 
 		other := v.term.String()
 
 		// implemented via one exists: one testing that A∩B = ∅
-		out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ?sub ", other, " ", uniqObj, "B . BIND ( ", uniqObj, " < ", uniqObj, "B AS ?result", v.id, ") .  FILTER (!bound(?result", v.id, ") || !(?result", v.id, ")) .  } .")
+		out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ?sub ", other, " ", uniqObj, "B . BIND ( ", uniqObj, " < ", uniqObj, "B AS ?result", v.id, ") .  FILTER (!bound(?result", v.id, ") || !(?result", v.id, ")) .  } .")
 	case lessThanOrEquals: // Universal: there is no value node with value higher than those reachable by lessThan
-		// if path == "" {
+		// if path == nil {
 		// 	log.Panicln("Standard Violating and unsupported use of sh:lessThanOrEquals inside  NodeShapde.")
 		// }
 		other := v.term.String()
 
 		// implemented via one exists: one testing that A∩B = ∅
-		out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ?sub ", other, " ", uniqObj, "B . BIND ( ", uniqObj, " <= ", uniqObj, "B AS ?result", v.id, ") .  FILTER (!bound(?result", v.id, ") || !(?result", v.id, ")) .  } .")
+		out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ?sub ", other, " ", uniqObj, "B . BIND ( ", uniqObj, " <= ", uniqObj, "B AS ?result", v.id, ") .  FILTER (!bound(?result", v.id, ") || !(?result", v.id, ")) .  } .")
 	}
 
 	return out
 }
 
-func (v PropertyPairConstraint) SparqlBodyValidation(obj, path string) (out string) {
+func (v PropertyPairConstraint) SparqlBodyValidation(obj string, path PropertyPath) (out string) {
 	// uniqObj := obj + strconv.Itoa(int(v.pp)) + v.term.RawValue()
 	uniqObj := fmt.Sprint(obj, v.id)
 
 	switch v.pp {
 	case equals: // Universal Property: set equality between value nodes and objects reachable via equals
 		other := v.term.String()
-		if path != "" {
+		if path != nil {
 
 			// implemented via two not exists: one testing that A ⊆ B and another testing B ⊆ A
-			out1 := fmt.Sprint("?sub ", other, " ", uniqObj, "A . FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, "A .} . ")
-			out2 := fmt.Sprint("?sub ", path, " ", uniqObj, "B . FILTER NOT EXISTS { ?sub ", other, " ", uniqObj, "B .} . ")
+			out1 := fmt.Sprint("?sub ", other, " ", uniqObj, "A . FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, "A .} . ")
+			out2 := fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, "B . FILTER NOT EXISTS { ?sub ", other, " ", uniqObj, "B .} . ")
 
 			out = fmt.Sprint("OPTIONAL { ", out1, "} OPTIONAL {", out2, " } FILTER ( BOUND (", uniqObj, "A) || BOUND(", uniqObj, "B) ) ")
 		} else { // NON-STANDARD: implementing this since the Test Suite supports it (for some reason)
@@ -1376,16 +1615,16 @@ func (v PropertyPairConstraint) SparqlBodyValidation(obj, path string) (out stri
 
 	case disjoint: // Universal Property: set of value nodes and those reachable by disjoint must be distinct
 		other := v.term.String()
-		if path != "" {
+		if path != nil {
 			// implemented via one exists: one testing that A∩B = ∅
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ?sub ", other, " ", uniqObj, " .")
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ?sub ", other, " ", uniqObj, " .")
 		} else { // NON-STANDARD: implementing this since the Test Suite supports it (for some reason)
 			inner := fmt.Sprint("FILTER ( ", uniqObj, " = ", obj, "  ).")
 			out = fmt.Sprint(obj, " ", other, " ", uniqObj, ". ", inner)
 		}
 
 	case lessThan: // Universal: there is no value node with value higher or equal than those reachable by lessThan
-		// if path == "" {
+		// if path == nil {
 		// 	log.Panicln("Standard Violating and unsupported use of sh:lessThan inside  NodeShapde.")
 		// }
 		other := v.term.String()
@@ -1393,9 +1632,9 @@ func (v PropertyPairConstraint) SparqlBodyValidation(obj, path string) (out stri
 		// implemented via one exists: one testing that A∩B = ∅
 		// out = fmt.Sprint("?sub ", other, " ", uniqObj, " . FILTER( ", other, " <= ", obj, " ) .")
 
-		out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ?sub ", other, " ", uniqObj, "B . BIND ( ", uniqObj, " < ", uniqObj, "B AS ?result", v.id, ") .  FILTER (!bound(?result", v.id, ") || !(?result", v.id, ")) .")
+		out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ?sub ", other, " ", uniqObj, "B . BIND ( ", uniqObj, " < ", uniqObj, "B AS ?result", v.id, ") .  FILTER (!bound(?result", v.id, ") || !(?result", v.id, ")) .")
 	case lessThanOrEquals: // Universal: there is no value node with value higher than those reachable by lessThan
-		// if path == "" {
+		// if path == nil {
 		// 	log.Panicln("Standard Violating and unsupported use of sh:lessThanOrEquals inside  NodeShapde.")
 		// }
 		other := v.term.String()
@@ -1403,7 +1642,7 @@ func (v PropertyPairConstraint) SparqlBodyValidation(obj, path string) (out stri
 		// implemented via one exists: one testing that A∩B = ∅
 		// out = fmt.Sprint("?sub ", other, " ", uniqObj, " . FILTER( ", other, " < ", obj, " )  .")
 
-		out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ?sub ", other, " ", uniqObj, "B . BIND ( ", uniqObj, " <= ", uniqObj, "B AS ?result", v.id, ") .  FILTER (!bound(?result", v.id, ") || !(?result", v.id, ")) .")
+		out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ?sub ", other, " ", uniqObj, "B . BIND ( ", uniqObj, " <= ", uniqObj, "B AS ?result", v.id, ") .  FILTER (!bound(?result", v.id, ") || !(?result", v.id, ")) .")
 	}
 
 	return out
@@ -1439,6 +1678,7 @@ const (
 
 type OtherConstraint struct {
 	oc           Other
+	graph        *rdf2go.Graph // needed for path extraction for the closedness constraint
 	closed       bool
 	allowedPaths *[]string
 	terms        []rdf2go.Term // overloaded, for in/hasValue this collects the terms to match, for closed
@@ -1450,7 +1690,7 @@ func (v OtherConstraint) GetSubConstraints() []Constraint {
 	return []Constraint{}
 }
 
-func (v OtherConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, target SparqlQueryFlat) (res bool, reports []ValidationResult) {
+func (v OtherConstraint) SparqlCheck(ep endpoint, obj string, path PropertyPath, shapeNames rdf2go.Term, target SparqlQueryFlat) (result bool, reports []ValidationResult) {
 	// focusNode = obj
 	// path = path
 	// value .. must be extracted from query
@@ -1458,7 +1698,7 @@ func (v OtherConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, 
 	// sourceConstraintComponent .. known
 
 	targetLine := fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}")
-	res = true
+	result = true
 	body := v.SparqlBodyValidation(obj, path)
 	uniqObj := fmt.Sprint(obj, v.id)
 	var header []string
@@ -1476,10 +1716,11 @@ func (v OtherConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, 
 	}
 
 	checkQuery := SparqlQuery{
-		head:  header,
-		body:  []string{targetLine, body},
-		group: []string{},
-		graph: ep.GetGraph(),
+		head:   header,
+		target: targetLine,
+		body:   []string{body},
+		group:  []string{},
+		graph:  ep.GetGraph(),
 	}
 
 	table := ep.Query(checkQuery)
@@ -1489,39 +1730,41 @@ func (v OtherConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, 
 		var report ValidationResult
 		// row := table.content[i]
 
-		report.focusNode = row[0].String()
+		report.focusNode = row[0]
 		if v.oc != closed {
 			report.pathName = path
 		} else {
-			report.pathName = row[1].String()
+			report.pathName = SimplePath{path: row[1]} // Sparql cannot return complex paths here
 		}
 
 		report.sourceShape = shapeNames
 
 		switch v.oc {
 		case in:
-			report.sourceConstraintComponent = "sh:InConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "InConstraintComponent")
 		case hasValue:
-			report.sourceConstraintComponent = "sh:HasValueConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "HasValueConstraintComponent")
 		case closed:
-			report.sourceConstraintComponent = "sh:ClosedConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "ClosedConstraintComponent")
 		}
 
-		if focusNodeisValueNode {
+		if focusNodeisValueNode && v.oc != hasValue {
 			report.value = report.focusNode
+		} else if focusNodeisValueNode && v.oc == hasValue {
+			report.value = nil
 		}
-		if len(header) == 2 {
+		if v.oc != hasValue && len(header) == 2 {
 			// fmt.Println("~~~~~~~~~~~~~~~~~~~~~")
 			// fmt.Println("ROW", row)
 			// fmt.Println("VC", v.oc)
 			// fmt.Println("~~~~~~~~~~~~~~~~~~~~~")
-			report.value = row[1].String()
-		} else if len(header) == 3 {
-			report.value = row[2].String()
+			report.value = row[1]
+		} else if v.oc != hasValue && len(header) == 3 {
+			report.value = row[2]
 		}
 
 		reports = append(reports, report)
-		res = false
+		result = false
 		// if focusNodeisValueNode {
 		// 	break // stop after the first hit in this case
 		// }
@@ -1529,7 +1772,7 @@ func (v OtherConstraint) SparqlCheck(ep endpoint, obj, path, shapeNames string, 
 
 	// fmt.Println("OTHER: returning this many reports:", len(reports))
 
-	return res, reports
+	return result, reports
 }
 
 func (v OtherConstraint) String() string {
@@ -1560,7 +1803,7 @@ func (v OtherConstraint) String() string {
 	return fmt.Sprint(_sh, "in ", sb.String())
 }
 
-func (v OtherConstraint) SparqlBody(obj, path string) (out string) {
+func (v OtherConstraint) SparqlBody(obj string, path PropertyPath) (out string) {
 	uniqObj := fmt.Sprint(obj, v.id)
 
 	switch v.oc {
@@ -1570,17 +1813,17 @@ func (v OtherConstraint) SparqlBody(obj, path string) (out string) {
 		for i := range v.terms {
 			inList = append(inList, v.terms[i].String())
 		}
-		if path != "" { // Property Shape
+		if path != nil { // Property Shape
 
 			inner := fmt.Sprint("FILTER ( ", uniqObj, " NOT IN (", strings.Join(inList, ", "), ") ) .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else { // Node Shape
 			out = fmt.Sprint("FILTER ( ", obj, "  IN (", strings.Join(inList, ", "), ") ) .")
 		}
 	case hasValue: // Existential Property: there _must_ exist a value that
-		if path != "" { // Property Shape
+		if path != nil { // Property Shape
 			inner := fmt.Sprint("FILTER ( ", uniqObj, " IN (", v.terms[0].String(), ") ) .")
-			out = fmt.Sprint("FILTER EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else { // Node Shape
 			out = fmt.Sprint("FILTER ( ", obj, " IN (", v.terms[0].String(), ") ) .")
 		}
@@ -1604,7 +1847,7 @@ func (v OtherConstraint) SparqlBody(obj, path string) (out string) {
 	return out
 }
 
-func (v OtherConstraint) SparqlBodyValidation(obj, path string) (out string) {
+func (v OtherConstraint) SparqlBodyValidation(obj string, path PropertyPath) (out string) {
 	uniqObj := fmt.Sprint(obj, v.id)
 	switch v.oc {
 	case in: // Univereal Property: every value node must be \in terms
@@ -1613,17 +1856,17 @@ func (v OtherConstraint) SparqlBodyValidation(obj, path string) (out string) {
 		for i := range v.terms {
 			inList = append(inList, v.terms[i].String())
 		}
-		if path != "" { // Property Shape
+		if path != nil { // Property Shape
 
 			inner := fmt.Sprint("FILTER ( ", uniqObj, " NOT IN (", strings.Join(inList, ", "), ") ) .")
-			out = fmt.Sprint("?sub ", path, " ", uniqObj, " . ", inner)
+			out = fmt.Sprint("?sub ", path.PropertyString(), " ", uniqObj, " . ", inner)
 		} else { // Node Shape
 			out = fmt.Sprint("FILTER ( ", obj, "  NOT IN (", strings.Join(inList, ", "), ") ) .")
 		}
 	case hasValue: // Existential Property: there _must_ exist a value that
-		if path != "" { // Property Shape
+		if path != nil { // Property Shape
 			inner := fmt.Sprint("FILTER ( ", uniqObj, " IN (", v.terms[0].String(), ") ) .")
-			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path, " ", uniqObj, " . ", inner, "}")
+			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else { // Node Shape
 			out = fmt.Sprint("FILTER ( ", obj, " NOT IN (", v.terms[0].String(), ") ) .")
 		}
@@ -1676,7 +1919,7 @@ func ExtractOtherConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out Oth
 
 		if !foundFirst && !foundRest && !foundNil {
 			// log.Panicln("Invalid In Constraint structure in graph")
-			return out, errors.New(fmt.Sprint("Invalid In Constraint structure in graph"))
+			return out, errors.New("invalid In Constraint structure in graph")
 		}
 
 	case _sh + "closed":
@@ -1698,7 +1941,7 @@ func ExtractOtherConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out Oth
 
 		if len(ignoredProp) > 1 {
 			// log.Panicln("Defined sh:ignoredProperties more than once for a node shape.")
-			return out, errors.New("Defined sh:ignoredProperties more than once for a node shape.")
+			return out, errors.New("defined sh:ignoredProperties more than once for a node shape")
 		}
 
 		if len(ignoredProp) == 1 {
@@ -1725,7 +1968,7 @@ func ExtractOtherConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out Oth
 
 			if !foundFirst && !foundRest && !foundNil {
 				// log.Panicln("Invalid ignoredProperties structure in shape definition")
-				return out, errors.New(fmt.Sprint("Invalid ignoredProperties structure in shape definition"))
+				return out, errors.New("invalid ignoredProperties structure in shape definition")
 			}
 		}
 
@@ -1744,26 +1987,38 @@ func ExtractOtherConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out Oth
 
 /// LOGICAL CONSTRAINTS
 
-func GetTableForLogicalConstraints(ep endpoint, path string, propertyName string, targets []SparqlQueryFlat) (out Table[rdf2go.Term]) {
+// TODO: make sure the same targeLine is never cached twice
+
+var targetCache map[string]Table[rdf2go.Term] = make(map[string]Table[rdf2go.Term])
+
+func GetTableForLogicalConstraints(ep endpoint, path PropertyPath, propertyName string, targets []SparqlQueryFlat) (out Table[rdf2go.Term]) {
 	if len(targets) == 0 {
 		return &GroupedTable[rdf2go.Term]{}
 	}
 	// out = &TableSimple[rdf2go.Term]{}
-	if path != "" {
+	if path != nil {
 		for i := range targets {
-			pathBody := "?sub " + path + " ?obj ."
+			pathBody := "?sub " + path.PropertyString() + " ?obj ."
 
-			groupConcat := fmt.Sprint("( ?obj AS ?", propertyName, "group )")
+			groupConcat := fmt.Sprint("( ?obj AS ?", propertyName, " )")
 
 			targetLine := fmt.Sprint("{\n\t", targets[i].StringPrefix(false), "\n\t}")
 
 			checkQuery := SparqlQuery{
-				head:  []string{"?sub", groupConcat},
-				body:  []string{targetLine, pathBody},
-				graph: ep.GetGraph(),
+				head:   []string{"?sub", groupConcat},
+				target: targetLine,
+				body:   []string{pathBody},
+				graph:  ep.GetGraph(),
 			}
 
-			tmp := ep.Query(checkQuery)
+			var tmp Table[rdf2go.Term]
+
+			if cache, ok := targetCache[checkQuery.String()]; ok {
+				tmp = cache
+			} else {
+				tmp = ep.Query(checkQuery)
+				targetCache[checkQuery.String()] = tmp
+			}
 
 			// fmt.Println("Table before merge ", tmp)
 			if out == nil {
@@ -1781,13 +2036,20 @@ func GetTableForLogicalConstraints(ep endpoint, path string, propertyName string
 			targetLine := fmt.Sprint("{\n\t", targets[i].StringPrefix(false), "\n\t}")
 
 			checkQuery := SparqlQuery{
-				head:  []string{"?sub"},
-				body:  []string{targetLine},
+				head:   []string{"?sub"},
+				target: targetLine,
+				// body:   []string{targetLine},
 				graph: ep.GetGraph(),
 			}
 
-			tmp := ep.Query(checkQuery)
+			var tmp Table[rdf2go.Term]
 
+			if cache, ok := targetCache[checkQuery.String()]; ok {
+				tmp = cache
+			} else {
+				tmp = ep.Query(checkQuery)
+				targetCache[checkQuery.String()] = tmp
+			}
 			if out == nil {
 				out = tmp
 			} else {
@@ -1856,6 +2118,7 @@ func (s *ShaclDocument) ExtractAndListConstraint(graph *rdf2go.Graph, triple *rd
 			foundFirst = true
 
 			var sr ShapeRef
+			sr.doc = s
 
 			// check if shape already extracted, if not, do it now
 			_, ok := s.shapeNames[listTriples[i].Object.RawValue()]
@@ -1882,7 +2145,7 @@ func (s *ShaclDocument) ExtractAndListConstraint(graph *rdf2go.Graph, triple *rd
 
 	if !foundFirst && !foundRest && !foundNil {
 		// log.Panicln("Invalid AndList structure in graph")
-		return out, errors.New(fmt.Sprint("Invalid AndList structure in graph"))
+		return out, errors.New("invalid AndList structure in graph")
 	}
 
 	out.shapes = shapeRefs
@@ -1907,7 +2170,7 @@ func (n NotShapeConstraint) String() string {
 		c = green
 	}
 
-	var shapeString string = c.Sprint(n.shape.name)
+	shapeString := c.Sprint(n.shape.name)
 
 	return fmt.Sprint(_sh, "not ", shapeString)
 }
@@ -1920,6 +2183,7 @@ func (s *ShaclDocument) ExtractNotShapeConstraint(graph *rdf2go.Graph, triple *r
 
 	var sr ShapeRef
 	sr.negative = true
+	sr.doc = s
 
 	// check if shape already extracted, if not, do it now
 	_, ok := s.shapeNames[triple.Object.RawValue()]
@@ -1988,6 +2252,7 @@ func (s *ShaclDocument) ExtractOrShapeConstraint(graph *rdf2go.Graph, triple *rd
 			foundFirst = true
 
 			var sr ShapeRef
+			sr.doc = s
 
 			// check if shape already extracted, if not, do it now
 			_, ok := s.shapeNames[listTriples[i].Object.RawValue()]
@@ -2014,7 +2279,7 @@ func (s *ShaclDocument) ExtractOrShapeConstraint(graph *rdf2go.Graph, triple *rd
 
 	if !foundFirst && !foundRest && !foundNil {
 		// log.Panicln("Invalid Or structure in graph")
-		return out, errors.New(fmt.Sprint("Invalid Or structure in graph"))
+		return out, errors.New("invalid Or structure in graph")
 	}
 
 	out.shapes = shapeRefs
@@ -2070,6 +2335,7 @@ func (s *ShaclDocument) ExtractXoneShapeConstraint(graph *rdf2go.Graph, triple *
 			foundFirst = true
 
 			var sr ShapeRef
+			sr.doc = s
 
 			// check if shape already extracted, if not, do it now
 			_, ok := s.shapeNames[listTriples[i].Object.RawValue()]
@@ -2096,7 +2362,7 @@ func (s *ShaclDocument) ExtractXoneShapeConstraint(graph *rdf2go.Graph, triple *
 
 	if !foundFirst && !foundRest && !foundNil {
 		// log.Panicln("Invalid Xone structure in graph")
-		return out, errors.New(fmt.Sprint("Invalid Xone structure in graph"))
+		return out, errors.New("invalid Xone structure in graph")
 	}
 
 	out.shapes = shapeRefs
@@ -2184,6 +2450,7 @@ func (s *ShaclDocument) ExtractQSConstraint(graph *rdf2go.Graph, triple *rdf2go.
 	}
 
 	var sr ShapeRef
+	sr.doc = s
 
 	// check if shape already extracted, if not, do it now
 	_, ok := s.shapeNames[triple.Object.RawValue()]
@@ -2211,17 +2478,14 @@ type CardinalityConstraints struct {
 	num int  // the number on which it is consrained
 }
 
-func (v CardinalityConstraints) SparqlCheck(ep endpoint, obj, path, shapeNames string, target SparqlQueryFlat) (res bool, reports []ValidationResult) {
+func (v CardinalityConstraints) SparqlCheck(ep endpoint, obj string, path PropertyPath, shapeNames rdf2go.Term, target SparqlQueryFlat) (result bool, reports []ValidationResult) {
 	targetLine := fmt.Sprint("{\n\t", target.StringPrefix(false), "\n\t}")
-	res = true
-	body := fmt.Sprint("?sub ", path, " ", obj, ".")
+	result = true
+	body := fmt.Sprint("?sub ", path.PropertyString(), " ", obj, ".")
 
 	if v.min {
 		body = "OPTIONAL {\n\t" + body + "\n\t}"
 	}
-
-	focusNodeisValueNode := true
-	// var actualNum int
 
 	var countConst CountingSubQuery
 
@@ -2247,9 +2511,11 @@ func (v CardinalityConstraints) SparqlCheck(ep endpoint, obj, path, shapeNames s
 
 	checkQuery := SparqlQuery{
 		head:       []string{"?sub"},
-		body:       []string{targetLine, body},
+		target:     targetLine,
+		body:       []string{body},
 		subqueries: []CountingSubQuery{countConst},
 		graph:      ep.GetGraph(),
+		group:      []string{"?sub"},
 	}
 
 	table := ep.Query(checkQuery)
@@ -2259,28 +2525,26 @@ func (v CardinalityConstraints) SparqlCheck(ep endpoint, obj, path, shapeNames s
 		var report ValidationResult
 		// row := table.content[i]
 
-		report.focusNode = row[0].String()
+		report.focusNode = row[0]
 		report.pathName = path
 		report.sourceShape = shapeNames
 
 		if v.min {
-			report.sourceConstraintComponent = "sh:MinCountConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "MinCountConstraintComponent")
 		} else {
-			report.sourceConstraintComponent = "sh:MaxCountConstraintComponent"
+			report.sourceConstraintComponent = res(_sh + "MaxCountConstraintComponent")
 		}
 
 		reports = append(reports, report)
-		res = false
-		if focusNodeisValueNode {
-			break // stop after the first hit in this case
-		}
+		result = false
 	}
 
-	return res, reports
+	return result, reports
 }
 
 type PropertyPath interface {
 	PropertyString() string
+	PropertyRDF() string
 }
 
 type SimplePath struct {
@@ -2291,12 +2555,20 @@ func (s SimplePath) PropertyString() string {
 	return s.path.String()
 }
 
+func (s SimplePath) PropertyRDF() string {
+	return s.path.String()
+}
+
 type InversePath struct {
 	path PropertyPath
 }
 
 func (i InversePath) PropertyString() string {
 	return "^" + i.path.PropertyString()
+}
+
+func (i InversePath) PropertyRDF() string {
+	return fmt.Sprint("[ <", _sh, "inversePath> ", i.path.PropertyRDF(), " ]")
 }
 
 type SequencePath struct {
@@ -2311,6 +2583,14 @@ func (s SequencePath) PropertyString() string {
 	return strings.Join(out, "/")
 }
 
+func (s SequencePath) PropertyRDF() string {
+	var out []string
+	for i := range s.paths {
+		out = append(out, s.paths[i].PropertyRDF())
+	}
+	return "( " + strings.Join(out, " ") + " )"
+}
+
 type AlternativePath struct {
 	paths []PropertyPath
 }
@@ -2323,12 +2603,24 @@ func (a AlternativePath) PropertyString() string {
 	return strings.Join(out, "|")
 }
 
+func (a AlternativePath) PropertyRDF() string {
+	var out []string
+	for i := range a.paths {
+		out = append(out, a.paths[i].PropertyRDF())
+	}
+	return fmt.Sprint("[ <", _sh, "alternativePath> ( ", strings.Join(out, " "), " ) ]")
+}
+
 type ZerOrMorePath struct {
 	path PropertyPath
 }
 
+func (z ZerOrMorePath) PropertyRDF() string {
+	return fmt.Sprint("[ <", _sh, "zeroOrMorePath> ", z.path.PropertyRDF(), " ]")
+}
+
 func (z ZerOrMorePath) PropertyString() string {
-	return z.path.PropertyString() + "*"
+	return z.path.PropertyRDF() + "*"
 }
 
 type OneOrMorePath struct {
@@ -2339,12 +2631,20 @@ func (o OneOrMorePath) PropertyString() string {
 	return o.path.PropertyString() + "+"
 }
 
+func (o OneOrMorePath) PropertyRDF() string {
+	return fmt.Sprint("[ <", _sh, "oneoOrMorePath> ", o.path.PropertyRDF(), " ]")
+}
+
 type ZerOrOnePath struct {
 	path PropertyPath
 }
 
 func (o ZerOrOnePath) PropertyString() string {
 	return o.path.PropertyString() + "?"
+}
+
+func (o ZerOrOnePath) PropertyRDF() string {
+	return fmt.Sprint("[ <", _sh, "zeroOrOnePath> ", o.path.PropertyRDF(), " ]")
 }
 
 // ExtractPropertyPath takes the input graph, and one value term from an sh:path constraint,
@@ -2406,11 +2706,11 @@ func ExtractPropertyPath(graph *rdf2go.Graph, initTerm rdf2go.Term) (out Propert
 			foundNil := false
 
 			for i := 0; i < len(allTriples); i++ {
-				fmt.Println("Current triple: ", allTriples[i])
+				// fmt.Println("Current triple: ", allTriples[i])
 				switch allTriples[i].Predicate.RawValue() {
 				case _rdf + "nil": // to cover the edge case that we get a top level nil somehow
 					// log.Panicln("Invalid SHACL List, cannot have rdf:nil in predicate position")
-					return out, errors.New(fmt.Sprint("Invalid SHACL List, cannot have rdf:nil in predicate position"))
+					return out, errors.New("invalid SHACL List, cannot have rdf:nil in predicate position")
 					// foundNil = true
 				case _rdf + "first":
 					foundFirst = true
@@ -2423,18 +2723,18 @@ func ExtractPropertyPath(graph *rdf2go.Graph, initTerm rdf2go.Term) (out Propert
 					curr := pathNext
 
 					paths = append(paths, curr)
-					fmt.Println("Gotten path , ", curr)
+					// fmt.Println("Gotten path , ", curr)
 				case _rdf + "rest":
 					foundRest = true
 					newTriples := graph.All(allTriples[i].Object, nil, nil)
 					allTriples = append(allTriples, newTriples...) // wonder if this works
-					fmt.Println("Adding ", len(newTriples), " new triples based on term", allTriples[i].Object)
+					// fmt.Println("Adding ", len(newTriples), " new triples based on term", allTriples[i].Object)
 				}
 			}
 
 			if !foundFirst && !foundRest && !foundNil {
 				// log.Panicln("Invalid Sequence structure in graph")
-				// return out, errors.New(fmt.Sprint("Invalid Sequence structure in graph"))
+				return out, errors.New("invalid Sequence structure in graph")
 			}
 
 			out = SequencePath{paths: paths}
@@ -2458,6 +2758,10 @@ func (s *ShaclDocument) GetPropertyShape(graph *rdf2go.Graph, term rdf2go.Term) 
 			// log.Panicln("Shape term ", term.String(), " parsed before as NodeShape")
 			return out, errors.New(fmt.Sprint("Shape term ", term.String(), " parsed before as NodeShape"))
 		}
+		if out.shape.insideProp == nil {
+			return out, errors.New("prased propShape inproperly before")
+		}
+
 		return out, nil
 	}
 
@@ -2520,6 +2824,7 @@ func (s *ShaclDocument) GetPropertyShape(graph *rdf2go.Graph, term rdf2go.Term) 
 	if out.name == "" {
 		// out.name = fmt.Sprint("Property", id)
 		out.name = term.String()
+		// fmt.Println("Name of property", out.name)
 	}
 
 	// No need for a separate dependency check, since GetNodeShape above already took care of it
@@ -2554,7 +2859,8 @@ func (t TargetIndirect) String() string {
 	case TargetNode:
 		out = "(TargetNode) "
 	}
-	return out + t.actual.String()
+
+	return out + " <<" + (*t.indirection).PropertyString() + ">> " + t.actual.String()
 }
 
 type TargetClass struct {
@@ -2621,7 +2927,7 @@ func GetTargetTerm(t TargetExpression) string {
 	case TargetIndirect:
 		var after string
 		if t.indirection != nil {
-			after = fmt.Sprint("\n?indirect", t.level, (*t.indirection).PropertyString(), " ?sub .")
+			after = fmt.Sprint("\n?indirect", t.level, " ", (*t.indirection).PropertyString(), " ?sub .")
 			return (strings.ReplaceAll(GetTargetTerm(t.actual), "?sub", fmt.Sprint("?indirect", t.level))) + after
 		} else {
 			return GetTargetTerm(t.actual)
@@ -2764,6 +3070,7 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 		// Combine with other NodeShape constraint
 		case _sh + "node":
 			var sr ShapeRef
+			sr.doc = s
 
 			// check if blank (indicating an inlined shape def)
 			_, ok := triples[i].Object.(*rdf2go.BlankNode)
@@ -2809,9 +3116,24 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 				out.others = append(out.others, oc)
 			}
 		case _sh + "severity":
-			out.severity = triples[i].Object.String()
+			out.severity = triples[i].Object
 		case _sh + "message":
-			out.message = triples[i].Object.String()
+			// fmt.Println("Extracing sh:message: ", triples[i].Object.String())
+			message := make(map[string]rdf2go.Term)
+			switch messageType := triples[i].Object.(type) {
+			case *rdf2go.Literal:
+				if messageType.Datatype != nil && messageType.Datatype.RawValue() == _xsd+"string" {
+					message["en"] = messageType
+					out.message = message
+				} else if messageType.Language != "" {
+					// fmt.Println("Adding message")
+					message[messageType.Language] = messageType
+					out.message = message
+				}
+				// anything not matching these two cases is invalid, thus being ignored
+			default:
+				// invalid type of message, thus being ignored
+			}
 		// allows NodeShape to be manually 'turned off' (i.e. not be considered in validation)
 		case _sh + "deactivated":
 			tmp := triples[i].Object.RawValue()
@@ -2918,9 +3240,10 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 			name: []ShapeRef{{
 				name: out.properties[i].shape.GetIRI(),
 				ref:  out.properties[i],
+				doc:  s,
 			}},
 			origin:   qualName,
-			external: isExternal,
+			external: false,
 			mode:     property,
 			max:      -1,
 			path:     viaPath,
@@ -2929,7 +3252,9 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 	}
 
 	out.deps = deps
-	s.shapeNames[term.RawValue()] = &out
+	if insideProp == nil {
+		s.shapeNames[term.RawValue()] = &out
+	}
 
 	return &out, nil
 }

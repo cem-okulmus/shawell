@@ -34,7 +34,7 @@ type endpoint interface {
 	Answer(ns Shape, target []SparqlQueryFlat) Table[rdf.Term]
 	Query(s SparqlQuery) Table[rdf.Term]
 	QueryFlat(s SparqlQueryFlat) Table[rdf.Term]
-	QueryAsk(s string) bool
+	QueryString(s string) Table[rdf.Term]
 	Insert(input *rdf.Graph, fromGraph string) error
 	ClearGraph(fromGraph string) error
 	GetGraph() string
@@ -78,7 +78,7 @@ func (s *SparqlEndpoint) GetGraph() string { return s.fromGraph }
 
 func (s *SparqlEndpoint) ClearGraph(fromGraph string) (out error) {
 	if fromGraph == "" {
-		out = errors.New("Need to provide a graph for the Clear command.")
+		out = errors.New("need to provide a graph for the Clear command")
 		return out
 	}
 
@@ -101,10 +101,12 @@ func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string) (out error) 
 
 	// clear graph first
 
+	// fmt.Println("Attempting clear: ", s.fromGraph)
 	err := s.ClearGraph(s.fromGraph)
 	if err != nil {
 		return err
 	}
+	// fmt.Println("Passed Clear")
 
 	var sb strings.Builder
 
@@ -228,14 +230,18 @@ func (s *SparqlEndpoint) QueryFlat(query SparqlQueryFlat) Table[rdf.Term] {
 	return out
 }
 
-func (s *SparqlEndpoint) QueryAsk(query string) bool {
+func (s *SparqlEndpoint) QueryString(query string) Table[rdf.Term] {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query)
 	if err != nil {
 		fmt.Println("Query in question:\n ", query)
 		panic(err)
 	}
-	// fmt.Println("Query:  \n", query)
+	out := GetTable(res)
 
-	return res.Boolean
+	if s.debug {
+		fmt.Println("Output: \n, ", out)
+	}
+
+	return out
 }

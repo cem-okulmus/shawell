@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/fatih/color"
 
 	rdf "github.com/cem-okulmus/MyRDF2Go"
+	rdf2go "github.com/cem-okulmus/MyRDF2Go"
 )
 
 type depMode int32
@@ -45,62 +47,72 @@ type ShaclDocument struct {
 	answered      bool
 	materialised  bool
 	validated     bool
+	debug         bool
+	fromGraph     string
 }
 
 func (s ShaclDocument) String() string {
 	var sb strings.Builder
 	for _, t := range s.shapeNames {
-		sb.WriteString(fmt.Sprintln("\n", t.String()))
-	}
-
-	sb.WriteString("Deps: \n")
-
-	for k := range s.shapeNames {
-
-		deps := s.depMap[k]
-
-		var sb2 strings.Builder
-
-		var c *color.Color
-
-		rec, _ := s.TransitiveClosure(k)
-		// rec := false
-
-		for _, d := range deps {
-
-			if d.mode == not {
-				c = color.New(color.FgRed).Add(color.Underline)
-			} else {
-				c = color.New(color.FgGreen).Add(color.Underline)
-			}
-
-			sb2.WriteString(" ")
-			var namesString []string
-			for _, sr := range d.name {
-				namesString = append(namesString, sr.name)
-			}
-			if d.external {
-				sb2.WriteString(c.Sprint(strings.Join(namesString, ", ")))
-			} else {
-				sb2.WriteString(c.Sprint("{", strings.Join(namesString, ", "), "}"))
-			}
-
+		if t.IsBlank() && !s.debug {
+			continue
 		}
-		if len(deps) == 0 {
-			sb.WriteString(fmt.Sprint(k, " is independent. \n"))
-		} else {
-			if rec {
-				sb.WriteString(fmt.Sprint(k, "(rec.) depends on ", sb2.String(), ". \n"))
+		sb.WriteString(fmt.Sprintln("\n", t.StringTab(0, false, s.debug)))
+	}
+
+	if s.debug {
+		sb.WriteString("Deps: \n")
+
+		for k := range s.shapeNames {
+
+			deps := s.depMap[k]
+
+			var sb2 strings.Builder
+
+			var c *color.Color
+
+			rec, _ := s.TransitiveClosure(k)
+			// rec := false
+
+			for _, d := range deps {
+
+				if d.mode == not {
+					c = color.New(color.FgRed).Add(color.Underline)
+				} else {
+					c = color.New(color.FgGreen).Add(color.Underline)
+				}
+
+				sb2.WriteString(" ")
+				var namesString []string
+				for _, sr := range d.name {
+					namesString = append(namesString, sr.name)
+				}
+				if d.external {
+					sb2.WriteString(c.Sprint(strings.Join(namesString, ", ")))
+				} else {
+					sb2.WriteString(c.Sprint("{", strings.Join(namesString, ", "), "}"))
+				}
+
+			}
+			if len(deps) == 0 {
+				sb.WriteString(fmt.Sprint(k, " is independent. \n"))
 			} else {
-				sb.WriteString(fmt.Sprint(k, " depends on ", sb2.String(), ". \n"))
+				if rec {
+					sb.WriteString(fmt.Sprint(k, "(rec.) depends on ", sb2.String(), ". \n"))
+				} else {
+					sb.WriteString(fmt.Sprint(k, " depends on ", sb2.String(), ". \n"))
+				}
 			}
 		}
 	}
-
-	sb.WriteString("\nQualnames: \n")
-	for k, v := range s.shapeNames {
-		sb.WriteString(fmt.Sprint(k, " : ", v.GetQualName(), "\n"))
+	if s.debug {
+		sb.WriteString("\nQualnames: \n")
+		for k, v := range s.shapeNames {
+			sb.WriteString(fmt.Sprint(k, " : ", v.GetQualName(), " ", v.GetLogName(), "\n"))
+		}
 	}
+
+	fmt.Println("BEFORE ABBR", sb.String())
 
 	return abbr(sb.String())
 }
@@ -169,7 +181,7 @@ Outer:
 	return finalOut
 }
 
-func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint) (out ShaclDocument) {
+func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint, debug bool) (out ShaclDocument) {
 	// var detected bool = true
 	out.shapeNames = make(map[string]Shape)
 	out.condAnswers = make(map[string]Table[rdf.Term])
@@ -177,6 +189,7 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint) (out S
 	out.targets = make(map[string]Table[rdf.Term])
 	out.depMap = make(map[string][]dependency)
 	out.materialised = false
+	out.fromGraph = fromGraph
 
 	for _, t := range GetNodeTerms(rdfGraph) {
 		name := t.RawValue()
@@ -223,10 +236,12 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint) (out S
 					indirect := DepToIndirectTarget(dep, tmp[i])
 					indirects = append(indirects, indirect)
 				}
-				fmt.Println("Gotten ", len(tmp), " targets from dependant. Path ", dep.path)
+				if debug {
+					fmt.Println("Gotten ", len(tmp), " targets from dependant. Path ", dep.path)
 
-				// fmt.Println("Number of dependant shapes: ", len(v))
-				fmt.Println("Adding ", len(indirects), " indirect targets to shape ", s.name, " from origin ", k)
+					// fmt.Println("Number of dependant shapes: ", len(v))
+					fmt.Println("Adding ", len(indirects), " indirect targets to shape ", s.name, " from origin ", k)
+				}
 
 				out.shapeNames[s.name].AddIndirectTargets(indirects, nil) // don't change paths, as they were already defined abvoes
 			}
@@ -486,13 +501,20 @@ func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool
 	return false, out2
 }
 
+func removeSimple[T stringer](s []T, i int) []T {
+	s[i] = s[len(s)-1]
+	return s[:len(s)-1]
+}
+
 func remove[T stringer](s [][]T, i int) [][]T {
 	s[i] = s[len(s)-1]
 	return s[:len(s)-1]
 }
 
 func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
-	fmt.Println("Started AllCondAnswers")
+	if s.debug {
+		fmt.Println("Started AllCondAnswers")
+	}
 
 	// don't repeat this for the same document
 	if s.answered {
@@ -500,7 +522,10 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 	}
 
 	for k, v := range s.shapeNames {
-		fmt.Println("Current shape ", k)
+		if s.debug {
+			fmt.Println("Current shape ", k)
+		}
+
 		if !v.IsActive() {
 			continue
 		}
@@ -512,12 +537,26 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 		targetQueries, _ := s.GetTargetShape(k)
 
 		out := ep.Answer(v, targetQueries)
-		fmt.Println("For shape", k, " we got the Conditional Answers ", out.Limit(10))
-
+		if s.debug {
+			fmt.Println("For shape", k, " we got the Conditional Answers ", out.Limit(10))
+		}
 		s.condAnswers[k] = out
 	}
 
 	s.answered = true
+}
+
+func removeDuplicateVR(sliceList []ValidationResult) []ValidationResult {
+	allKeys := make(map[string]bool)
+	list := []ValidationResult{}
+	for _, item := range sliceList {
+		stringRep := item.StringComp()
+		if _, value := allKeys[stringRep]; !value {
+			allKeys[stringRep] = true
+			list = append(list, item)
+		}
+	}
+	return list
 }
 
 func removeDuplicate[T comparable](sliceList []T) []T {
@@ -625,9 +664,9 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 	} else {
 		depTable = s.UnwindAnswer(ref.name) // recursively compute the needed uncond. answers
 	}
-
-	fmt.Println("Depending Table\n", depTable)
-
+	if s.debug {
+		fmt.Println("Depending Table\n", depTable)
+	}
 	// NOTE: this only works for non-recursive shapes
 	// we now know that we deal with unconditional (unary) answers
 	if len(depTable.GetHeader()) > 1 {
@@ -641,7 +680,9 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 		for i, h := range uncondTable.GetHeader() {
 			if strings.HasPrefix(h, dep.origin) {
 				found = true
-				fmt.Println("Origin dap name: ", dep.origin)
+				if s.debug {
+					fmt.Println("Origin dap name: ", dep.origin)
+				}
 				c = i
 			}
 		}
@@ -681,7 +722,6 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 		log.Panicln("Given a non-grouped Table for affected Index Check")
 	}
 
-	// fmt.Println("Dep ", dep.name, " is of type list: ", isList)
 	for target := range uncondTableGrouped.IterTargets() {
 		switch dep.mode {
 		case node, property:
@@ -692,15 +732,17 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 			}
 
 		case not:
+			// fmt.Println("CHecking target", target)
 			if memListOne(depTable, uncondTableGrouped.GetGroupOfTarget(target, c)) {
 				// val, err := uncondTableGrouped.GetIndex(target)
 				// check(err)
 				affectedIndices = append(affectedIndices, target)
+				// fmt.Println("Adding target", target, " to affected indices")
 			}
 		case and:
 			// fmt.Println("Checking affected pos for AND")
 			if memListAll(depTable, uncondTableGrouped.GetGroupOfTarget(target, c)) {
-				fmt.Println("Keeping term ", uncondTableGrouped.GetGroupOfTarget(target, c))
+				// fmt.Println("Keeping term ", uncondTableGrouped.GetGroupOfTarget(target, c))
 				// val, err := uncondTableGrouped.GetIndex(target)
 				// check(err)
 				affectedIndices = append(affectedIndices, target)
@@ -720,7 +762,10 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 
 			// fmt.Println("Group gotten: ", uncondTableGrouped.GetGroupOfTarget(target, c))
 			if memListOr(depTableAll, uncondTableGrouped.GetGroupOfTarget(target, c)) {
-				fmt.Println("Keeping term ", target)
+				if s.debug {
+					fmt.Println("Keeping term ", target)
+				}
+
 				// val, err := uncondTableGrouped.GetIndex(target)
 				// check(err)
 				affectedIndices = append(affectedIndices, target)
@@ -752,11 +797,13 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 				if memListQualSibling(depTable, uncondTableGrouped.GetGroupOfTarget(target, c), min, max, siblingValues) {
 					// val, err := uncondTableGrouped.GetIndex(target)
 					// check(err)
-					fmt.Println("Adding target ", target)
+					// fmt.Println("Adding target ", target)
 					affectedIndices = append(affectedIndices, target)
 				}
 			} else {
-				fmt.Println("|||||||", " GOING INTO NON disjointedness  PATH")
+				if s.debug {
+					fmt.Println("|||||||", " GOING INTO NON disjointedness  PATH")
+				}
 				if memListQual(depTable, uncondTableGrouped.GetGroupOfTarget(target, c), min, max) {
 					// val, err := uncondTableGrouped.GetIndex(target)
 					// check(err)
@@ -783,20 +830,26 @@ func (s *ShaclDocument) IsRecursive() bool {
 }
 
 // NodeIsShape checks if a given node has a given shape, or not
-func (s *ShaclDocument) NodeIsShape(node, shape string) bool {
+func (s *ShaclDocument) NodeIsShape(node rdf2go.Term, shape string) bool {
 	if !s.answered {
 		log.Panicln("Called method NodeIsShape before document was answered")
 	}
 
-	table := s.uncondAnswers[shape]
+	table, found := s.uncondAnswers[shape]
+
+	if !found { // empty shape contains no nodes
+		return false
+	}
 
 	for row := range table.IterRows() {
-		if row[0].RawValue() == node {
+		if row[0].RawValue() == node.RawValue() {
 			return true
 		}
 	}
 
-	fmt.Println("Node ", node, " is not in hape ", shape)
+	if s.debug {
+		fmt.Println("Node ", node, " is not in shape ", shape)
+	}
 	return false
 }
 
@@ -843,8 +896,10 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 		log.Panicln("Received uncondTable that is not grouped!")
 	}
 
-	fmt.Println("At Shape", name, " with Qualname ", s.shapeNames[name].GetQualName())
-	fmt.Println("InUnWindANswer, HEader from saved CondAnswers ", len(uncondTable.GetHeader()), " len: ", len(uncondTable.content))
+	if s.debug {
+		fmt.Println("At Shape", name, " with Qualname ", s.shapeNames[name].GetQualName())
+		fmt.Println("InUnWindANswer, HEader from saved CondAnswers ", len(uncondTable.GetHeader()), " len: ", len(uncondTable.content))
+	}
 
 	deps := shape.GetDeps()
 
@@ -860,7 +915,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 
 			ref := dep.name[0] // node has only single reference (current design)
 
-			var affectedIndices []rdf.Term = s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, nil)
+			affectedIndices := s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, nil)
 
 			// only keep the affected indices in and case
 			temp := GroupedTable[rdf.Term]{
@@ -875,7 +930,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 		case and:
 			for _, ref := range dep.name {
 				// filtering out answers from uncondTable
-				var affectedIndices []rdf.Term = s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, nil)
+				affectedIndices := s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, nil)
 
 				// only keep the affected indices in and case
 				temp := GroupedTable[rdf.Term]{
@@ -891,7 +946,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 		case not:
 			ref := dep.name[0] // not has only single reference (current design)
 
-			var affectedIndices []rdf.Term = s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, nil)
+			affectedIndices := s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, nil)
 
 			// using reverse sort to "safely" remove indices from slice while iterating over them
 			// sort.Sort(sort.Reverse(sort.IntSlice(affectedIndices)))
@@ -900,7 +955,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 			}
 
 		case or:
-			var allAffected []rdf.Term = s.GetAffectedIndices(dep.name[0], dep, uncondTable, dep.min, dep.max, nil)
+			allAffected := s.GetAffectedIndices(dep.name[0], dep, uncondTable, dep.min, dep.max, nil)
 
 			// wonder if this will workdepTableAll
 
@@ -915,7 +970,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 			uncondTable = &temp
 		case xone:
 			// similar to or, but compute the symmetric difference at every step
-			var allAffected []rdf.Term = s.GetAffectedIndices(dep.name[0], dep, uncondTable, dep.min, dep.max, nil)
+			allAffected := s.GetAffectedIndices(dep.name[0], dep, uncondTable, dep.min, dep.max, nil)
 
 			// only keep those that match at least one dep
 			temp := GroupedTable[rdf.Term]{
@@ -940,7 +995,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 			siblings, err := s.DefineSiblingValues(name, ref.name)
 			check(err)
 
-			var affectedIndices []rdf.Term = s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, siblings)
+			affectedIndices := s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, siblings)
 
 			// only keep the affected indices in and case
 			temp := GroupedTable[rdf.Term]{
@@ -957,7 +1012,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 		uncondTable.Regroup()
 	}
 
-	var newTable *GroupedTable[rdf.Term] = &GroupedTable[rdf.Term]{}
+	newTable := &GroupedTable[rdf.Term]{}
 	newTable.header = uncondTable.header[:1]
 
 	if len(uncondTable.group) > 0 {
@@ -973,8 +1028,10 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 	// create the new mapping
 	s.uncondAnswers[name] = newTable
 
-	fmt.Println("UNCOND ANSWER:")
-	fmt.Println("Shape ", name, "\n", newTable)
+	if s.debug {
+		fmt.Println("UNCOND ANSWER:")
+		fmt.Println("Shape ", name, "\n", newTable)
+	}
 
 	return s.uncondAnswers[name]
 }
@@ -1140,6 +1197,7 @@ func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table[rdf.Term]
 		header := LPTables[i].GetHeader()[0]
 		if strings.EqualFold(header, shape) {
 			nodesWithShape = LPTables[i]
+			// fmt.Println("For shape ", shape, ", found this LPTable", LPTables[i])
 			break
 		}
 	}
@@ -1154,17 +1212,18 @@ func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table[rdf.Term]
 	out.header = append(out.header, "Not "+shapeObj.GetIRI())
 
 	targets := s.targets[shape]
-	
 
 outer:
 	for t_row := range targets.IterRows() { // will this work?
 
 		for n_row := range nodesWithShape.IterRows() {
-			if n_row[0].Equal(t_row[0]) {
+			if n_row[0].RawValue() == t_row[0].RawValue() {
 				// fmt.Println("Found ", term, " in the answer")
 				continue outer
 			}
 		}
+		// fmt.Println("Found ", t_row[0], " as invalid target of shape ", shape)
+		// fmt.Println("nodesWithShape: ", nodesWithShape)
 		out.content = append(out.content, []rdf.Term{t_row[0]})
 	}
 
@@ -1175,9 +1234,9 @@ outer:
 // occur in the decorated graph with the shapes they are supposed to. If not, it returns false
 // as well as list of tables for each node shape of the nodes that fail validation.
 func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table[rdf.Term]) {
-	var out map[string]Table[rdf.Term] = make(map[string]Table[rdf.Term])
+	out := make(map[string]Table[rdf.Term])
 	// var outExp map[string][]string = make(map[string][]string)
-	var result bool = true
+	result := true
 
 	// Produce InvalidTargets for each node shape
 	for _, shape := range s.shapeNames {
@@ -1201,9 +1260,9 @@ func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table[rdf.Term])
 // occur in the decorated graph with the shapes they are supposed to. If not, it returns false
 // as well as list of tables for each node shape of the nodes that fail validation.
 func (s *ShaclDocument) ValidateLP(LPTables []Table[rdf.Term], ep endpoint) (bool, map[string]Table[rdf.Term]) {
-	var out map[string]Table[rdf.Term] = make(map[string]Table[rdf.Term])
+	out := make(map[string]Table[rdf.Term])
 	// var outExp map[string][]string = make(map[string][]string)
-	var result bool = true
+	result := true
 
 	// Produce InvalidTargets for each node shape
 	for _, shape := range s.shapeNames {
@@ -1221,4 +1280,32 @@ func (s *ShaclDocument) ValidateLP(LPTables []Table[rdf.Term], ep endpoint) (boo
 	s.validated = true
 
 	return result, out
+}
+
+// AdoptLPAnswers takes the computed answers from the logic program and replaces entries
+// in uncondTables with them. If it cannot match any table, it returns an error
+func (s *ShaclDocument) AdoptLPAnswers(LPTables []Table[rdf.Term]) error {
+	for i := range LPTables {
+
+		shapeFound := false
+		// find matching shape
+		for name, shape := range s.shapeNames {
+			if shape.GetLogName() == LPTables[i].GetHeader()[0] {
+				shapeFound = true
+				LPTables[i].SetHeader([]string{shape.GetIRI()})
+				s.uncondAnswers[name] = LPTables[i]
+			}
+		}
+		if !shapeFound && !strings.HasSuffix(LPTables[i].GetHeader()[0], "INTERN") &&
+			!strings.HasPrefix(LPTables[i].GetHeader()[0], "XONE") &&
+			!strings.HasPrefix(LPTables[i].GetHeader()[0], "OrShape") &&
+			!strings.HasPrefix(LPTables[i].GetHeader()[0], "Qual") &&
+			!strings.HasPrefix(LPTables[i].GetHeader()[0], "count") {
+			fmt.Println("LPTable in question ", LPTables[i])
+			return errors.New("could not match all lptables")
+		}
+
+	}
+
+	return nil
 }

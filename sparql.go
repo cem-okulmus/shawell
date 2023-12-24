@@ -51,14 +51,14 @@ type CountingSubQuery struct {
 	max    bool
 	numMin int
 	numMax int
-	path   string
+	path   PropertyPath
 }
 
 func (c CountingSubQuery) ProduceBody() string {
 	var sb strings.Builder
 
-	head := []string{"?sub", fmt.Sprint("( COUNT(?obj) AS ?count", c.id, ")")}
-	core := "OPTIONAL {\n\t" + fmt.Sprint("?sub ", c.path, " ?obj. ") + "\n\t}"
+	head := []string{"?sub", fmt.Sprint("( COUNT(DISTINCT ?obj) AS ?count", c.id, ")")}
+	core := "OPTIONAL {\n\t" + fmt.Sprint("?sub ", c.path.PropertyString(), " ?obj. ") + "\n\t}"
 	body := []string{c.target, core}
 	group := []string{"?sub"}
 
@@ -92,6 +92,7 @@ func (c CountingSubQuery) ProduceBody() string {
 
 type SparqlQuery struct {
 	head       []string
+	target     string   // make target explicit
 	body       []string // positive expressions that check for existance of some objects
 	group      []string
 	graph      string // if non-empty, then we query terms inside this named graph only
@@ -180,13 +181,21 @@ func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 	sb.WriteString("SELECT ")
 	sb.WriteString(strings.Join(s.head, " "))
 	sb.WriteString(" { \n\t")
-	if s.graph != "" {
-		sb.WriteString(" GRAPH " + s.graph + " ")
+
+	if len(s.subqueries) == 0 {
+		if s.graph != "" {
+			sb.WriteString(" GRAPH " + s.graph + " ")
+		}
+		sb.WriteString(s.target + "\n\t")
 	}
+
 	sb.WriteString(strings.Join(s.body, "\n\t"))
 
 	if len(s.subqueries) > 0 {
 		for _, c := range s.subqueries {
+			if s.graph != "" {
+				sb.WriteString(" GRAPH " + s.graph + " ")
+			}
 			sb.WriteString(c.ProduceBody())
 		}
 	}

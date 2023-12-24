@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/fatih/color"
 	rdfA "github.com/knakk/rdf"
 
 	rdf "github.com/cem-okulmus/MyRDF2Go"
@@ -26,6 +27,7 @@ type Table[T stringer] interface {
 	GetAttribute(att string) ([]T, error) // Get a column via its attribute name, if exists
 	IterRows() chan []T                   // iterate over rows the table (in ordered fashion)
 	GetHeader() []string                  // header required to be strings
+	SetHeader([]string)                   // change the header
 	AddRow([]T)                           // add a Row to the Table
 	Merge(Table[T]) error                 // merging two tables together, if they share headers
 	Len() int
@@ -48,7 +50,7 @@ func (t *TableSimple[T]) GetColumn(column int) ([]T, error) {
 	var out []T
 
 	if column >= len(t.header) || column < 0 {
-		return []T{}, errors.New("Out of bounds error.")
+		return []T{}, errors.New("out of bounds error")
 	}
 
 	for i := range t.content {
@@ -59,7 +61,7 @@ func (t *TableSimple[T]) GetColumn(column int) ([]T, error) {
 }
 
 func (t *TableSimple[T]) GetAttribute(att string) ([]T, error) {
-	var column int = -1
+	column := -1
 
 	// find attribute
 	for i := range t.header {
@@ -68,7 +70,7 @@ func (t *TableSimple[T]) GetAttribute(att string) ([]T, error) {
 		}
 	}
 	if column == -1 {
-		return []T{}, errors.New("Attribute not found error.")
+		return []T{}, errors.New("attribute not found error")
 	}
 
 	return t.GetColumn(column)
@@ -87,7 +89,8 @@ func (t *TableSimple[T]) IterRows() chan []T {
 	return out
 }
 
-func (t *TableSimple[T]) GetHeader() []string { return t.header }
+func (t *TableSimple[T]) GetHeader() []string      { return t.header }
+func (t *TableSimple[T]) SetHeader(input []string) { t.header = input }
 
 func (t *TableSimple[T]) AddRow(row []T) { t.content = append(t.content, row) }
 
@@ -96,10 +99,12 @@ func (t TableSimple[T]) Limit(n int) string {
 		n = len(t.content)
 	}
 	var sb strings.Builder
+	bold := color.New(color.Bold)
+
 	const padding = 4
 	w := tabwriter.NewWriter(&sb, 0, 0, padding, ' ', tabwriter.TabIndent)
 
-	fmt.Fprint(w, "\n", strings.Join(t.header, "\t"), "\t\n")
+	fmt.Fprint(w, "\n", bold.Sprint(strings.Join(t.header, "\t")), "\t\n")
 
 	for i := range t.content[:n] {
 
@@ -127,14 +132,14 @@ func (t *TableSimple[T]) Merge(other Table[T]) error {
 
 	otherCast, ok := other.(*TableSimple[T])
 	if !ok {
-		return errors.New("Cannot merge a SimpleTable with different kind")
+		return errors.New("cannot merge a SimpleTable with different kind")
 	}
 	if len(t.header) != len(otherCast.header) {
-		return errors.New("Incompatible tables to merge")
+		return errors.New("incompatible tables to merge")
 	}
 	for i := range t.header {
 		if t.header[i] != otherCast.header[i] {
-			return errors.New("Incompatible tables to merge")
+			return errors.New("incompatible tables to merge")
 		}
 	}
 
@@ -157,7 +162,7 @@ func GetTable(r *sparql.Results) *TableSimple[rdf.Term] {
 
 	var resultTable [][]rdf.Term
 
-	var ordering map[string]int = make(map[string]int)
+	ordering := make(map[string]int)
 
 	for i, s := range r.Head.Vars {
 		ordering[s] = i
@@ -166,7 +171,7 @@ func GetTable(r *sparql.Results) *TableSimple[rdf.Term] {
 	for _, t := range r.Solutions() {
 		// var tupleOrdered []rdf.Term = make([]rdf.Term, len(t))
 
-		var tupleOrdered []rdf.Term = make([]rdf.Term, len(r.Head.Vars))
+		tupleOrdered := make([]rdf.Term, len(r.Head.Vars))
 
 		for _, s := range r.Head.Vars {
 
@@ -228,7 +233,7 @@ func (t *GroupedTable[T]) GetColumn(column int) ([]T, error) {
 	var out []T
 
 	if column >= len(t.header) || column < 0 {
-		return []T{}, errors.New("Out of bounds error.")
+		return []T{}, errors.New("out of bounds error")
 	}
 
 	for i := range t.content {
@@ -239,7 +244,7 @@ func (t *GroupedTable[T]) GetColumn(column int) ([]T, error) {
 }
 
 func (t *GroupedTable[T]) GetAttribute(att string) ([]T, error) {
-	var column int = -1
+	column := -1
 
 	// find attribute
 	for i := range t.header {
@@ -248,7 +253,7 @@ func (t *GroupedTable[T]) GetAttribute(att string) ([]T, error) {
 		}
 	}
 	if column == -1 {
-		return []T{}, errors.New("Attribute not found error.")
+		return []T{}, errors.New("attribute not found error")
 	}
 
 	return t.GetColumn(column)
@@ -257,12 +262,22 @@ func (t *GroupedTable[T]) GetAttribute(att string) ([]T, error) {
 func (t *GroupedTable[T]) IterTargets() chan T {
 	out := make(chan T)
 
+	// if len(t.group) != 0 {
 	go func() {
-		for k := range t.group {
+		for k := range t.key {
 			out <- k
 		}
+
 		close(out) // hope it's ok to close this at this point
 	}()
+	// } else {
+	// 	go func() {
+	// 		for i := range t.content {
+	// 			out <- t.content[i][0]
+	// 		}
+	// 		close(out) // hope it's ok to close this at this point
+	// 	}()
+	// }
 
 	return out
 }
@@ -281,6 +296,8 @@ func (t *GroupedTable[T]) IterRows() chan []T {
 }
 
 func (t *GroupedTable[T]) GetHeader() []string { return t.header }
+
+func (t *GroupedTable[T]) SetHeader(input []string) { t.header = input }
 
 func (t *GroupedTable[T]) AddRow(row []T) { t.content = append(t.content, row) }
 
@@ -320,15 +337,15 @@ func (t *GroupedTable[T]) Merge(other Table[T]) error {
 
 	otherCast, ok := other.(*GroupedTable[T])
 	if !ok {
-		return errors.New("Cannot merge a GroupedTable with different kind")
+		return errors.New("cannot merge a GroupedTable with different kind")
 	}
 
 	if len(t.header) != len(otherCast.header) {
-		return errors.New("Incompatible tables to merge")
+		return errors.New("incompatible tables to merge")
 	}
 	for i := range t.header {
 		if t.header[i] != otherCast.header[i] {
-			return errors.New("Incompatible tables to merge")
+			return errors.New("incompatible tables to merge")
 		}
 	}
 
@@ -351,11 +368,11 @@ func (t *GroupedTable[T]) GetIndex(key T) (int, error) {
 
 func (t *GroupedTable[T]) AddIndex(key T, other *GroupedTable[T]) error {
 	if len(t.header) != len(other.header) {
-		return errors.New("Incompatible tables to AddIndex")
+		return errors.New("incompatible tables to AddIndex")
 	}
 	for i := range t.header {
 		if t.header[i] != other.header[i] {
-			return errors.New("Incompatible tables to AddIndex")
+			return errors.New("incompatible tables to AddIndex")
 		}
 	}
 
@@ -410,7 +427,8 @@ func (t *GroupedTable[T]) Regroup() {
 
 	// fmt.Println("Header: ", t.header)
 	for i := range t.header {
-		if strings.HasSuffix(t.header[i], "group") {
+		// if strings.HasSuffix(t.header[i], "group") {
+		if i > 0 {
 			// fmt.Println("Adding index ", i, " s ince header ", t.header[i], " ends on group")
 			attributesToGroup = append(attributesToGroup, i)
 		}
