@@ -1074,7 +1074,7 @@ func TargetsToQueries(targets []TargetExpression) (out []SparqlQueryFlat) {
 
 	for i := range queries {
 		out = append(out, SparqlQueryFlat{
-			head: "?sub",
+			head: "?sub ?indirect0",
 			body: []string{queries[i]},
 		})
 	}

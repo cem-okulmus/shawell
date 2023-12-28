@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"text/tabwriter"
@@ -536,18 +537,18 @@ func main() {
 	var graphName string
 
 	// check if data needs to be inserted into Endpoint
-	// if *dataIncluded {
-	// 	VR, err = ExtractValidationReport(g2)
-	// 	check(err)
+	if *dataIncluded {
+		// VR, err = ExtractValidationReport(g2)
+		// check(err)
 
-	// 	// fmt.Println("Extracted VR\n", VR)
+		// fmt.Println("Extracted VR\n", VR)
 
-	// 	basename := filepath.Base(*shaclDocPath)
-	// 	fileName := strings.TrimSuffix(basename, filepath.Ext(basename))
-	// 	res := endpoint.Insert(g2, "<"+_sh+fileName+">")
-	// 	check(res)
-	// 	graphName = "<" + _sh + fileName + ">"
-	// }
+		basename := filepath.Base(*shaclDocPath)
+		fileName := strings.TrimSuffix(basename, filepath.Ext(basename))
+		res := endpoint.Insert(g2, "<"+_sh+fileName+">")
+		check(res)
+		graphName = "<" + _sh + fileName + ">"
+	}
 
 	parsedDoc := GetShaclDocument(g2, graphName, endpoint, *debug)
 	parsedDoc.debug = *debug

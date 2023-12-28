@@ -91,6 +91,15 @@ func ExtractValidationReport(graph *rdf2go.Graph) (out *ValidationReport, err er
 	return out, nil
 }
 
+func NilIfBlank(input rdf2go.Term) rdf2go.Term {
+	switch input.(type) {
+	case rdf2go.BlankNode, *rdf2go.BlankNode:
+		return nil
+	default:
+		return input
+	}
+}
+
 func ExtractValidationResult(sub rdf2go.Term, graph *rdf2go.Graph) (out *ValidationResult, err error) {
 	out = &ValidationResult{}
 	focusBindings := graph.All(sub, res(_sh+"focusNode"), nil)
@@ -218,6 +227,7 @@ type ValidationResult struct {
 	severity                  rdf2go.Term
 	message                   map[string]rdf2go.Term // support language tags
 	otherValue                rdf2go.Term
+	indirect0                 rdf2go.Term
 	detail                    *ComplexResult
 }
 
@@ -295,6 +305,9 @@ func (vr ValidationResult) StringGeneric(comparison bool) string {
 
 	if comparison && vr.otherValue != nil {
 		sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "otherValue> ", vr.otherValue.String(), "; \n"))
+	}
+	if comparison && vr.indirect0 != nil {
+		sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "indirect0> ", vr.indirect0.String(), "; \n"))
 	}
 
 	// if vr.message != "" {
@@ -534,9 +547,9 @@ func (v ValueTypeConstraint) SparqlCheck(ep endpoint, obj string, path PropertyP
 
 	if obj == "?sub" {
 		focusNodeisValueNode = true
-		header = []string{obj}
+		header = []string{obj, "?indirect0"}
 	} else {
-		header = []string{"?sub", uniqObj}
+		header = []string{"?sub", uniqObj, "?indirect0"}
 	}
 
 	checkQuery := SparqlQuery{
@@ -571,8 +584,10 @@ func (v ValueTypeConstraint) SparqlCheck(ep endpoint, obj string, path PropertyP
 
 		if focusNodeisValueNode {
 			report.value = report.focusNode
+			report.indirect0 = NilIfBlank(row[1])
 		} else {
 			report.value = row[1]
+			report.indirect0 = NilIfBlank(row[2])
 		}
 
 		reports = append(reports, report)
@@ -856,9 +871,9 @@ func (v ValueRangeConstraint) SparqlCheck(ep endpoint, obj string, path Property
 
 	if obj == "?sub" {
 		focusNodeisValueNode = true
-		header = []string{obj}
+		header = []string{obj, "?indirect0"}
 	} else {
-		header = []string{"?sub", uniqObj}
+		header = []string{"?sub", uniqObj, "?indirect0"}
 	}
 
 	checkQuery := SparqlQuery{
@@ -894,8 +909,10 @@ func (v ValueRangeConstraint) SparqlCheck(ep endpoint, obj string, path Property
 
 		if focusNodeisValueNode {
 			report.value = report.focusNode
+			report.indirect0 = NilIfBlank(row[1])
 		} else {
 			report.value = row[1]
+			report.indirect0 = NilIfBlank(row[2])
 		}
 
 		reports = append(reports, report)
@@ -1062,11 +1079,11 @@ func (v StringBasedConstraint) SparqlCheck(ep endpoint, obj string, path Propert
 
 	if obj == "?sub" {
 		focusNodeisValueNode = true
-		header = []string{obj}
+		header = []string{obj, "?indirect0"}
 	} else if uniqLangCase {
-		header = []string{"?sub", "( lang(" + uniqObj + ") AS ?lang) "}
+		header = []string{"?sub", "( lang(" + uniqObj + ") AS ?lang) ", "?indirect0"}
 	} else {
-		header = []string{"?sub", uniqObj}
+		header = []string{"?sub", uniqObj, "?indirect0"}
 	}
 
 	checkQuery := SparqlQuery{
@@ -1103,10 +1120,13 @@ func (v StringBasedConstraint) SparqlCheck(ep endpoint, obj string, path Propert
 
 		if focusNodeisValueNode {
 			report.value = report.focusNode
+			report.indirect0 = NilIfBlank(row[1])
 		} else if uniqLangCase {
 			report.otherValue = row[1]
+			report.indirect0 = NilIfBlank(row[2])
 		} else {
 			report.value = row[1]
+			report.indirect0 = NilIfBlank(row[2])
 		}
 
 		reports = append(reports, report)
@@ -1420,14 +1440,14 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj string, path Proper
 	var header []string
 
 	if path == nil {
-		header = []string{"?sub", uniqObj} // only consider equals and disjoint
+		header = []string{"?sub", uniqObj, "?indirect0"} // only consider equals and disjoint
 	} else {
 		if inEqualsCase {
-			header = []string{"?sub", uniqObj + "A", uniqObj + "B"}
+			header = []string{"?sub", uniqObj + "A", uniqObj + "B", "?indirect0"}
 		} else if lessThanCase {
-			header = []string{"?sub", uniqObj, uniqObj + "B"}
+			header = []string{"?sub", uniqObj, uniqObj + "B", "?indirect0"}
 		} else {
-			header = []string{"?sub", uniqObj}
+			header = []string{"?sub", uniqObj, "?indirect0"}
 		}
 	}
 
@@ -1481,6 +1501,7 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj string, path Proper
 				haveValueB = true
 				nodeToCheckB = row[2]
 			}
+			report.indirect0 = NilIfBlank(row[3])
 
 			if haveValueA {
 				reportA := report
@@ -1506,6 +1527,7 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj string, path Proper
 			} else {
 				nodeToCheck = row[1]
 			}
+			report.indirect0 = NilIfBlank(row[2])
 
 			report.value = nodeToCheck
 			reports = append(reports, report)
@@ -1515,6 +1537,9 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj string, path Proper
 
 			if lessThanCase {
 				report.otherValue = row[2]
+				report.indirect0 = NilIfBlank(row[3])
+			} else {
+				report.indirect0 = NilIfBlank(row[2])
 			}
 
 			reports = append(reports, report)
@@ -1705,13 +1730,13 @@ func (v OtherConstraint) SparqlCheck(ep endpoint, obj string, path PropertyPath,
 	focusNodeisValueNode := false
 
 	if v.oc == closed {
-		header = []string{"?sub", "?path", "?ClosedObjTest"}
+		header = []string{"?sub", "?path", "?ClosedObjTest", "?indirect0"}
 	} else {
 		if obj == "?sub" {
 			focusNodeisValueNode = true
-			header = []string{obj}
+			header = []string{obj, "?indirect0"}
 		} else {
-			header = []string{"?sub", uniqObj}
+			header = []string{"?sub", uniqObj, "?indirect0"}
 		}
 	}
 
@@ -1750,17 +1775,21 @@ func (v OtherConstraint) SparqlCheck(ep endpoint, obj string, path PropertyPath,
 
 		if focusNodeisValueNode && v.oc != hasValue {
 			report.value = report.focusNode
+			report.indirect0 = NilIfBlank(row[1])
 		} else if focusNodeisValueNode && v.oc == hasValue {
 			report.value = nil
+			report.indirect0 = NilIfBlank(row[1])
 		}
-		if v.oc != hasValue && len(header) == 2 {
+		if v.oc != hasValue && len(header) == 3 {
 			// fmt.Println("~~~~~~~~~~~~~~~~~~~~~")
 			// fmt.Println("ROW", row)
 			// fmt.Println("VC", v.oc)
 			// fmt.Println("~~~~~~~~~~~~~~~~~~~~~")
 			report.value = row[1]
-		} else if v.oc != hasValue && len(header) == 3 {
+			report.indirect0 = NilIfBlank(row[2])
+		} else if v.oc != hasValue && len(header) == 4 {
 			report.value = row[2]
+			report.indirect0 = NilIfBlank(row[3])
 		}
 
 		reports = append(reports, report)
@@ -2526,6 +2555,7 @@ func (v CardinalityConstraints) SparqlCheck(ep endpoint, obj string, path Proper
 		// row := table.content[i]
 
 		report.focusNode = row[0]
+		// report.indirect0 = row[1]
 		report.pathName = path
 		report.sourceShape = shapeNames
 
@@ -2860,7 +2890,13 @@ func (t TargetIndirect) String() string {
 		out = "(TargetNode) "
 	}
 
-	return out + " <<" + (*t.indirection).PropertyString() + ">> " + t.actual.String()
+	if t.indirection != nil {
+		out = out + " <<" + (*t.indirection).PropertyString() + ">> " + t.actual.String()
+	} else {
+		out = out + t.actual.String()
+	}
+
+	return out
 }
 
 type TargetClass struct {
