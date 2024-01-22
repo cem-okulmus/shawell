@@ -8,8 +8,7 @@ import (
 
 	"github.com/fatih/color"
 
-	rdf "github.com/cem-okulmus/MyRDF2Go"
-	rdf2go "github.com/cem-okulmus/MyRDF2Go"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 )
 
 type depMode int32
@@ -830,7 +829,7 @@ func (s *ShaclDocument) IsRecursive() bool {
 }
 
 // NodeIsShape checks if a given node has a given shape, or not
-func (s *ShaclDocument) NodeIsShape(node rdf2go.Term, shape string) bool {
+func (s *ShaclDocument) NodeIsShape(node rdf.Term, shape string) bool {
 	if !s.answered {
 		log.Panicln("Called method NodeIsShape before document was answered")
 	}

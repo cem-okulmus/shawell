@@ -10,7 +10,7 @@ import (
 
 	"github.com/fatih/color"
 
-	rdf "github.com/cem-okulmus/MyRDF2Go"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 )
 
 type EARLReport struct {

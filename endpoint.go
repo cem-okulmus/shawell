@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	rdf "github.com/cem-okulmus/MyRDF2Go"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 
 	"golang.org/x/exp/constraints"
 
-	"github.com/cem-okulmus/sparql"
+	"github.com/knakk/sparql"
 )
 
 // Sorted has complexity: O(n * log(n)), a needs to be sorted

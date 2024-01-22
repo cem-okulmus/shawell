@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	rdf "github.com/cem-okulmus/MyRDF2Go"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 
 	"github.com/alecthomas/participle"
 	"github.com/alecthomas/participle/lexer"

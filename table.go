@@ -11,8 +11,8 @@ import (
 	"github.com/fatih/color"
 	rdfA "github.com/knakk/rdf"
 
-	rdf "github.com/cem-okulmus/MyRDF2Go"
-	"github.com/cem-okulmus/sparql"
+	rdf "github.com/cem-okulmus/rdf2go-1"
+	"github.com/knakk/sparql"
 )
 
 // GetTable returns from a query result a table, and a header of shape names

@@ -9,7 +9,7 @@ import (
 
 	"github.com/fatih/color"
 
-	"github.com/cem-okulmus/MyRDF2Go"
+	"github.com/cem-okulmus/rdf2go-1"
 )
 
 type ValidationReport struct {
