@@ -372,11 +372,18 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			}
 			// qualHead := fmt.Sprint(mark, "Head(", element, ")")
 
+			// var tmp string
+			// if deps[i].max != -1 {
+			// 	tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min, ", K <= ", deps[i].max)
+			// } else {
+			// 	tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min)
+			// }
+
 			var tmp string
 			if deps[i].max != -1 {
-				tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min, ", K <= ", deps[i].max)
+				tmp = fmt.Sprint("#count{ A  : ", mark, "(A), ", ref, "(A)  } = X, X >= ", deps[i].min, ", X <= ", deps[i].max)
 			} else {
-				tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min)
+				tmp = fmt.Sprint("#count{ A  : ", mark, "(A), ", ref, "(A)  } >= ", deps[i].min)
 			}
 
 			qualifiedRule := rule{
@@ -384,46 +391,46 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				body: strings.Split(tmp, ", "),
 			}
 
-			tmp = fmt.Sprint("count", mark, "(X,K), not -count", mark, "Max(K)")
-			countMax1 := rule{
-				head: fmt.Sprint("count", mark, "Max(K)"),
-				body: strings.Split(tmp, ", "),
-			}
+			// tmp = fmt.Sprint("count", mark, "(X,K), not -count", mark, "Max(K)")
+			// countMax1 := rule{
+			// 	head: fmt.Sprint("count", mark, "Max(K)"),
+			// 	body: strings.Split(tmp, ", "),
+			// }
 
-			tmp = fmt.Sprint("count", mark, "(X,K), count", mark, "(Y,K+1)")
-			countMax2 := rule{
-				head: fmt.Sprint("-count", mark, "Max(K)"),
-				body: strings.Split(tmp, ", "),
-			}
+			// tmp = fmt.Sprint("count", mark, "(X,K), count", mark, "(Y,K+1)")
+			// countMax2 := rule{
+			// 	head: fmt.Sprint("-count", mark, "Max(K)"),
+			// 	body: strings.Split(tmp, ", "),
+			// }
 
-			tmp = fmt.Sprint("count", mark, "(Y,K-1), ", mark, "(X), ", ref,
-				"(X), Y < X, not -count", mark, "(X,K)")
-			countStep1 := rule{
-				head: fmt.Sprint("count", mark, "(X,K)"),
-				body: strings.Split(tmp, ", "),
-			}
+			// tmp = fmt.Sprint("count", mark, "(Y,K-1), ", mark, "(X), ", ref,
+			// 	"(X), Y < X, not -count", mark, "(X,K)")
+			// countStep1 := rule{
+			// 	head: fmt.Sprint("count", mark, "(X,K)"),
+			// 	body: strings.Split(tmp, ", "),
+			// }
 
-			tmp = fmt.Sprint("count", mark, "(Y,K-1), ", mark, "(X), ", ref,
-				"(X), Y < X, ", mark, "(Z), ", ref, "(Z), Y < Z, Z < X")
-			countStep2 := rule{
-				head: fmt.Sprint("-count", mark, "(X,K)"),
-				body: strings.Split(tmp, ", "),
-			}
+			// tmp = fmt.Sprint("count", mark, "(Y,K-1), ", mark, "(X), ", ref,
+			// 	"(X), Y < X, ", mark, "(Z), ", ref, "(Z), Y < Z, Z < X")
+			// countStep2 := rule{
+			// 	head: fmt.Sprint("-count", mark, "(X,K)"),
+			// 	body: strings.Split(tmp, ", "),
+			// }
 
-			tmp = fmt.Sprint(mark, "(X), ", ref, "(X), not -count", mark, "(X,1)")
-			countBase1 := rule{
-				head: fmt.Sprint("count", mark, "(X,1)"),
-				body: strings.Split(tmp, ", "),
-			}
-			tmp = fmt.Sprint(mark, "(X), ", ref, "(X), ", mark, "(Y), ", ref, "(Y), X > Y")
-			countBase2 := rule{
-				head: fmt.Sprint("-count", mark, "(X,1)"),
-				body: strings.Split(tmp, ", "),
-			}
+			// tmp = fmt.Sprint(mark, "(X), ", ref, "(X), not -count", mark, "(X,1)")
+			// countBase1 := rule{
+			// 	head: fmt.Sprint("count", mark, "(X,1)"),
+			// 	body: strings.Split(tmp, ", "),
+			// }
+			// tmp = fmt.Sprint(mark, "(X), ", ref, "(X), ", mark, "(Y), ", ref, "(Y), X > Y")
+			// countBase2 := rule{
+			// 	head: fmt.Sprint("-count", mark, "(X,1)"),
+			// 	body: strings.Split(tmp, ", "),
+			// }
 
-			rules := []rule{countBase1, countBase2, countStep1, countStep2, countMax1, countMax2, qualifiedRule}
+			// rules := []rule{countBase1, countBase2, countStep1, countStep2, countMax1, countMax2, qualifiedRule}
 
-			externalRules = append(externalRules, rules...)
+			externalRules = append(externalRules, qualifiedRule)
 			// attach facts to values to mark for counting
 			for _, v := range valuesSlice {
 				externalRules = append(externalRules, rule{head: fmt.Sprint(mark, "(", rewrite(v), ")")})

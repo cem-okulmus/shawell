@@ -112,7 +112,7 @@ func (s ShaclDocument) String() string {
 		}
 	}
 
-	fmt.Println("BEFORE ABBR", sb.String())
+	// fmt.Println("BEFORE ABBR", sb.String())
 
 	return abbr(sb.String())
 }

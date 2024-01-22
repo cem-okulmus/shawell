@@ -422,7 +422,7 @@ func LogicProgram(t *testing.T) EARLReport {
 
 		dataincluded := true
 		actual := answerShacl(endpoint, parsedDoc,
-			&dataincluded, false, false, nil, true, false)
+			&dataincluded, false, false, nil, true, true)
 
 		result := actual.conforms == VR.conforms
 
