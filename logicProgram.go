@@ -357,6 +357,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			ref := deps[i].name[0].GetLogName() // like not, qualified can only have single reference
 
 			mark := fmt.Sprint("Qual", qual)
+			atLeast := fmt.Sprint("AtLeast", qual)
 			qual++
 
 			if len(out) == 0 {
@@ -379,11 +380,30 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			// 	tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min)
 			// }
 
+			// var tmp string
+			// if deps[i].max != -1 {
+			// 	tmp = fmt.Sprint("#count{ A  : ", mark, "(A), ", ref, "(A)  } = X, X >= ", deps[i].min, ", X <= ", deps[i].max)
+			// } else {
+			// 	tmp = fmt.Sprint("#count{ A  : ", mark, "(A), ", ref, "(A)  } >= ", deps[i].min)
+			// }
+
 			var tmp string
-			if deps[i].max != -1 {
-				tmp = fmt.Sprint("#count{ A  : ", mark, "(A), ", ref, "(A)  } = X, X >= ", deps[i].min, ", X <= ", deps[i].max)
+
+			min := deps[i].min
+			max := deps[i].max
+
+			if deps[i].min != 0 {
+				if deps[i].max != -1 {
+					tmp = fmt.Sprint(atLeast, "Un(", min, "), not ", atLeast, "Un(", max+1, ")")
+				} else {
+					tmp = fmt.Sprint(atLeast, "Un(", min, ")")
+				}
 			} else {
-				tmp = fmt.Sprint("#count{ A  : ", mark, "(A), ", ref, "(A)  } >= ", deps[i].min)
+				if deps[i].max != -1 {
+					tmp = fmt.Sprint("not ", atLeast, "Un(", max+1, ")")
+				} else {
+					tmp = "" // empty since trivially satisfied
+				}
 			}
 
 			qualifiedRule := rule{
@@ -432,9 +452,64 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			externalRules = append(externalRules, qualifiedRule)
 			// attach facts to values to mark for counting
-			for _, v := range valuesSlice {
-				externalRules = append(externalRules, rule{head: fmt.Sprint(mark, "(", rewrite(v), ")")})
+			for i, v := range valuesSlice {
+				v_i := rewrite(v)
+				if i == 0 {
+					externalRules = append(externalRules,
+						rule{head: fmt.Sprint(mark, "(", 0, ", ", v_i, ")")})
+					if i != len(valuesSlice)-1 {
+						v_ii := rewrite(valuesSlice[i+1])
+						externalRules = append(externalRules, rule{
+							head: fmt.Sprint(mark, "(", v_i, ", ", v_ii, ")"),
+						})
+					}
+
+				} else if i == len(valuesSlice)-1 {
+					externalRules = append(externalRules, rule{
+						head: fmt.Sprint(mark, "(", v_i, ", ", 1, ")"),
+					})
+				} else {
+					v_ii := rewrite(valuesSlice[i+1])
+					externalRules = append(externalRules, rule{
+						head: fmt.Sprint(mark, "(", v_i, ", ", v_ii, ")"),
+					})
+				}
 			}
+
+			// AtLeastRules
+			externalRules = append(externalRules, rule{
+				head: fmt.Sprint(atLeast, "(X,0)"),
+				body: []string{fmt.Sprint(mark, "(0,X)")},
+			})
+			externalRules = append(externalRules, rule{
+				head: fmt.Sprint(atLeast, "(X,1)"),
+				body: []string{
+					fmt.Sprint(mark, "(0,X) "),
+					fmt.Sprint(ref, "(X)"),
+				},
+			})
+			externalRules = append(externalRules, rule{
+				head: fmt.Sprint(atLeast, "(Y,Z)"),
+				body: []string{
+					fmt.Sprint(mark, "(X,Y) "),
+					fmt.Sprint(atLeast, "(X,Z)"),
+				},
+			})
+			externalRules = append(externalRules, rule{
+				head: fmt.Sprint(atLeast, "(Y,Z+1)"),
+				body: []string{
+					fmt.Sprint(mark, "(X,Y) "),
+					fmt.Sprint(atLeast, "(X,Z)"),
+					fmt.Sprint(ref, "(Y)"),
+				},
+			})
+
+			externalRules = append(externalRules, rule{
+				head: fmt.Sprint(atLeast, "Un(Y)"),
+				body: []string{
+					fmt.Sprint(atLeast, "(X,Y)"),
+				},
+			})
 
 		}
 	}

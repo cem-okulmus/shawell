@@ -1299,6 +1299,7 @@ func (s *ShaclDocument) AdoptLPAnswers(LPTables []Table[rdf.Term]) error {
 			!strings.HasPrefix(LPTables[i].GetHeader()[0], "XONE") &&
 			!strings.HasPrefix(LPTables[i].GetHeader()[0], "OrShape") &&
 			!strings.HasPrefix(LPTables[i].GetHeader()[0], "Qual") &&
+			!strings.HasPrefix(LPTables[i].GetHeader()[0], "AtLeast") &&
 			!strings.HasPrefix(LPTables[i].GetHeader()[0], "count") {
 			fmt.Println("LPTable in question ", LPTables[i])
 			return errors.New("could not match all lptables")
