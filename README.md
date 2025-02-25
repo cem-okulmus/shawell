@@ -1,4 +1,9 @@
 # shaWell
+
+[![](https://img.shields.io/github/v/tag/cem-okulmus/shawell?sort=semver)](https://github.com/cem-okulmus/shawell/releases/latest)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cem-okulmus/shawell.svg)](https://pkg.go.dev/github.com/cem-okulmus/shawell)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cem-okulmus/shawell)](https://goreportcard.com/report/github.com/cem-okulmus/shawell)
+
 A validator for SHACL using Well-founded semantics.
 
 ## Usage
