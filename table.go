@@ -366,6 +366,7 @@ func (t *GroupedTable[T]) GetIndex(key T) (int, error) {
 	return val, nil
 }
 
+// Join 
 func (t *GroupedTable[T]) AddIndex(key T, other *GroupedTable[T]) error {
 	if len(t.header) != len(other.header) {
 		return errors.New("incompatible tables to AddIndex")

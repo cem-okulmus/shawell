@@ -71,6 +71,9 @@ type NodeShape struct {
 }
 
 func (n *NodeShape) GetLogName() string {
+	// if demoLP && n.IRI != nil {
+	// 	return n.IRI.RawValue()
+	// }
 	return fmt.Sprint("Shape", n.id)
 }
 
@@ -635,6 +638,9 @@ func (p *PropertyShape) GetLogName() string {
 }
 
 func (p *PropertyShape) GetQualName() string {
+	// if demoLP {
+	// 	return p.shape.IRI.RawValue()
+	// }
 	return fmt.Sprint("Property", p.id)
 }
 

@@ -104,7 +104,7 @@ func (s ShaclDocument) String() string {
 			}
 		}
 	}
-	if s.debug {
+	if s.debug || demoLP {
 		sb.WriteString("\nQualnames: \n")
 		for k, v := range s.shapeNames {
 			sb.WriteString(fmt.Sprint(k, " : ", v.GetQualName(), " ", v.GetLogName(), "\n"))
@@ -561,12 +561,14 @@ func removeDuplicateVR(sliceList []ValidationResult) []ValidationResult {
 func removeDuplicate[T comparable](sliceList []T) []T {
 	allKeys := make(map[T]bool)
 	list := []T{}
+
 	for _, item := range sliceList {
 		if _, value := allKeys[item]; !value {
 			allKeys[item] = true
 			list = append(list, item)
 		}
 	}
+
 	return list
 }
 
@@ -677,12 +679,24 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 	if dep.external {
 		found := false
 		for i, h := range uncondTable.GetHeader() {
+
 			if strings.HasPrefix(h, dep.origin) {
 				found = true
 				if s.debug {
 					fmt.Println("Origin dap name: ", dep.origin)
 				}
 				c = i
+
+				// fmt.Println("||||||||||--------  Header ", h, " to Compare with ", dep.origin, " c = ", i)
+
+				// fmt.Println("Depending Table\n", depTable)
+
+				// fmt.Println("other Table \n ", uncondTable)
+
+				// fmt.Println("Depeche Mode: ", dep.mode)
+
+				// fmt.Println("|||||||||--------")
+
 			}
 		}
 		if !found {
@@ -870,6 +884,12 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 		return s.uncondAnswers[name] // just return empty table if answers not computed yet
 	}
 
+	// for k, v := range s.condAnswers {
+
+	// 	fmt.Println("For the shape ", k, " we got the uncond Table: \n", v)
+
+	// }
+
 	// check if result is already cached
 	if out, ok := s.uncondAnswers[name]; ok {
 		return out
@@ -913,7 +933,6 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 		case node, property:
 
 			ref := dep.name[0] // node has only single reference (current design)
-
 			affectedIndices := s.GetAffectedIndices(ref, dep, uncondTable, dep.min, dep.max, nil)
 
 			// only keep the affected indices in and case
@@ -1124,7 +1143,6 @@ func (s *ShaclDocument) MaterialiseTargets(ep endpoint) {
 // returns those targets that do not have this shape
 func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) Table[rdf.Term] {
 	var out TableSimple[rdf.Term]
-
 	if !s.answered {
 		s.AllCondAnswers(ep)
 	}
@@ -1241,6 +1259,7 @@ func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table[rdf.Term])
 	for _, shape := range s.shapeNames {
 		if shape.IsActive() { // deactivated shapes do not factor the validation
 			iri := shape.GetIRI()
+
 			invalidTargets := s.InvalidTargets(iri, ep)
 			if invalidTargets.Len() > 0 {
 				out[iri] = invalidTargets

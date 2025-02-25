@@ -16,6 +16,7 @@ import (
 
 // the hardcoded address to DLV
 var dlv string = "bin/dlv"
+var demoLP bool
 
 var (
 	renameMap  map[string]string
@@ -23,6 +24,10 @@ var (
 )
 
 func rewrite(term rdf.Term) string {
+	if demoLP {
+		return term.RawValue()
+	}
+
 	// check if already encoded
 	if _, ok := reverseMap[term.RawValue()]; ok {
 		return reverseMap[term.RawValue()]
@@ -520,26 +525,29 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 	return out
 }
 
+// GetLogNameFromQualName is meant to transform a LogName into a QualName. Edge case: sometimes the attribute 
+// check is already in QualName, so in that case we just return it again.
 func (s ShaclDocument) GetLogNameFromQualName(name string) (string, error) {
+
 	for _, v := range s.shapeNames {
 		switch vType := v.(type) {
 		case *PropertyShape:
-			if v.GetQualName() == name {
+			if v.GetQualName() == name || v.GetLogName() == name  {
 				return v.GetLogName(), nil
 			}
 			test := NodeShape{}
 			test.id = vType.id
-			if test.GetQualName() == name {
+			if test.GetQualName() == name || test.GetLogName() == name  {
 				return v.GetLogName(), nil
 			}
 		case *NodeShape:
-			if v.GetQualName() == name {
+			if v.GetQualName() == name || v.GetLogName() == name  {
 				return v.GetLogName(), nil
 			}
 		}
 	}
 
-	return "", errors.New("no shape with this qualname found")
+	return "", errors.New("no shape with this qualname found: " + name)
 }
 
 func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency, internalDeps bool) (out program) {

@@ -237,10 +237,15 @@ func (l labelTime) String() string {
 //   - result message
 //   - the various properties (value, source, path, focus, constraint)
 
+var QueryStore []string
+
 // the main validation function, extracted here to be used for easy testing
 func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool, debug,
-	omitVR bool, vrOutFile *os.File, silent bool, forceLP bool,
+	omitVR bool, vrOutFile *os.File, silent bool, forceLP bool, onlyLP bool, onlyQueries bool,
 ) *ValidationReport {
+	// if onlyLP || onlyQueries {
+	// 	silent = true
+	// }
 	if !debug {
 		log.SetOutput(io.Discard)
 	} else {
@@ -266,6 +271,19 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 	// 	fmt.Println(v.Limit(5))
 	// }
 
+	if onlyQueries {
+		fmt.Println("The produced SPAQRL queries:  \n\n")
+
+		for _, query := range QueryStore {
+			fmt.Println(abbr(query))
+		}
+
+		return nil
+
+	}
+
+
+
 	var res bool
 	var invalidTargets map[string]Table[rdf.Term]
 	var lp program
@@ -283,8 +301,12 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 		msec := d.Seconds() * float64(time.Second/time.Millisecond)
 		c.times = append(c.times, labelTime{time: msec, label: "Logic Program generation"})
 
-		if debug {
-			fmt.Println("LPinput ", lp)
+		if debug || onlyLP {
+			fmt.Println("The produced Logic Program:  \n\n")
+			fmt.Println(abbr(lp.String()))
+			if onlyLP {
+				return nil
+			}
 		}
 
 		start = time.Now()
@@ -423,7 +445,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 	}
 
 	if !silent && !omitVR && vrOutFile == nil {
-		fmt.Println("VALIDATION REPORT: \n", actual.String())
+		fmt.Println("VALIDATION REPORT: \n", abbr(actual.String()))
 	} else if vrOutFile != nil {
 		vrOutFile.WriteString(actual.String())
 	}
@@ -467,11 +489,18 @@ func main() {
 			"Using this and -omitVR at same time is superflous.")
 	forceLP := flagSet.Bool("forceLP", false, "Force the translation into logic programs.")
 
+	// input flags demo purposes
+
+	demoOutputOnlyLP := flagSet.Bool("demoOutputLP", false, "Outputs only the produced LPs.")
+
+	demoOutputQueries := flagSet.Bool("demoOutputQueries", false, "Outputs only the produced SPARQL queries.")
+
 	usingUpdateEndpoint := false
 
 	flagSet.Parse(os.Args[1:])
 
 	if *endpointAddress == "" || *shaclDocPath == "" {
+		fmt.Println("Input args: " + strings.Join(os.Args, " "))
 		flagSet.Usage()
 		os.Exit(-1)
 	}
@@ -503,6 +532,8 @@ func main() {
 	check(err)
 
 	// fmt.Println("Parsed Graph: ", g2)
+
+
 
 	endpoint := GetSparqlEndpoint(
 		*endpointAddress,
@@ -550,7 +581,15 @@ func main() {
 		graphName = "<" + _sh + fileName + ">"
 	}
 
+
+
 	parsedDoc := GetShaclDocument(g2, graphName, endpoint, *debug)
+
+	if *forceLP || *demoOutputOnlyLP {
+		demoLP = true
+	}
+
+
 	parsedDoc.debug = *debug
 	var addedText string
 	if !*debug {
@@ -559,9 +598,11 @@ func main() {
 	}
 	fmt.Println("The parsed SHACL Document:", addedText, parsedDoc.String())
 
+
+
 	// set set active
 	activeDoc = &parsedDoc
 
 	// Main Routine
-	answerShacl(endpoint, parsedDoc, dataIncluded, *debug, *omitVR, vrOUtFile, false, *forceLP)
+	answerShacl(endpoint, parsedDoc, dataIncluded, *debug, *omitVR, vrOUtFile, false, *forceLP, *demoOutputOnlyLP, *demoOutputQueries)
 }

@@ -2990,6 +2990,10 @@ func GetTargetTerm(t TargetExpression) string {
 // GetNodeShape takes as input an rdf2go graph and a term signifying a NodeShape
 // and then iteratively queries the rdf2go graph to extract all its details
 func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insideProp *PropertyShape) (*NodeShape, error) {
+	var out NodeShape
+
+
+
 	nodeShape, ok := s.shapeNames[term.RawValue()]
 
 	if ok {
@@ -2999,13 +3003,16 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 			return out, errors.New(fmt.Sprint("Shape term ", term.String(), " parsed before as PropertyShape"))
 		}
 		return out, nil
+	} else {
+		if insideProp == nil {
+			s.shapeNames[term.RawValue()] = &out
+		}
 	}
 
 	var viaPath *PropertyPath
 	var isExternal bool
 	var qualName string
 
-	var out NodeShape
 	out.IRI = term
 	out.id = getCount()
 	triples := graph.All(term, nil, nil) // this back-conversion here is needed (for some reason)
@@ -3288,9 +3295,7 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 	}
 
 	out.deps = deps
-	if insideProp == nil {
-		s.shapeNames[term.RawValue()] = &out
-	}
+
 
 	return &out, nil
 }
