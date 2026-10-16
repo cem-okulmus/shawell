@@ -96,7 +96,7 @@ func ExtractValidationReport(graph *rdf.Graph) (out *ValidationReport, err error
 // NilIfBlank returns nil if the input term is a blank node, otherwise returns the term unchanged.
 func NilIfBlank(input rdf.Term) rdf.Term {
 	switch input.(type) {
-	case rdf.BlankNode, *rdf.BlankNode:
+	case Unbound:
 		return nil
 	default:
 		return input
@@ -734,7 +734,9 @@ func (v ValueTypeConstraint) SparqlBody(obj string, path PropertyPath) (out stri
 				// 	b4 = ""
 				// }
 				// inner := "FILTER ( datatype( " + uniqObj + ") != " + v.term.RawValue() + " ) ."
-				inner := fmt.Sprint("FILTER ( ", b4, " ", v.term.String(), "(str(", uniqObj, ")) != ", uniqObj, " ) .")
+				// COALESCE turns a failed cast (ill-formed lexical form) into a violation, instead of
+				// an error that would make the FILTER drop the value
+				inner := fmt.Sprint("FILTER ( ", b4, " !COALESCE(", v.term.String(), "(str(", uniqObj, ")) = ", uniqObj, ", false) ) .")
 
 				out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 			} else {
@@ -1555,12 +1557,12 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj string, path Proper
 			if inEqualsCase && path != nil {
 				var haveValueA, haveValueB bool
 				var nodeToCheckA, nodeToCheckB rdf.Term
-				_, ok := row[1].(rdf.BlankNode)
+				_, ok := row[1].(Unbound)
 				if !ok {
 					haveValueA = true
 					nodeToCheckA = row[1]
 				}
-				_, ok = row[2].(rdf.BlankNode)
+				_, ok = row[2].(Unbound)
 				if !ok {
 					haveValueB = true
 					nodeToCheckB = row[2]
@@ -1580,7 +1582,7 @@ func (v PropertyPairConstraint) SparqlCheck(ep endpoint, obj string, path Proper
 				return rowReports, !haveValueA && !haveValueB
 			} else if inEqualsCase && path == nil {
 				var nodeToCheck rdf.Term
-				_, ok := row[1].(rdf.BlankNode)
+				_, ok := row[1].(Unbound)
 				if ok {
 					nodeToCheck = base.focusNode
 				} else {
