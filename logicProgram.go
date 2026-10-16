@@ -18,7 +18,7 @@ import (
 )
 
 // the hardcoded address to DLV
-var dlv string = func() string {
+var dlv = func() string {
 	if runtime.GOOS == "windows" {
 		return "bin/dlv.exe"
 	}
@@ -369,9 +369,9 @@ func DecodedString(encoded string) string {
 }
 
 var (
-	qual    int = 1
-	xoneVar int = 1
-	orVar   int = 1
+	qual    = 1
+	xoneVar = 1
+	orVar   = 1
 )
 
 // TODO expandRules needs to be heavily rewritten.
@@ -497,7 +497,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			for v := range valuesSlice {
 				for r := range genericXONErules {
-					boundRules = append(boundRules, genericXONErules[r].rewrite("VAR", rewrite(valuesSlice[v])))
+					boundRules = append(boundRules, genericXONErules[r].rewrite("VAR", rewrite(valuesSlice[v]))) // #nosec G602 -- v ranges over valuesSlice
 				}
 			}
 
@@ -548,18 +548,18 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			atLeast := fmt.Sprint("AtLeast", qual)
 			qual++
 
+			qualHead := fmt.Sprint(mark, "Head(", element, ")")
 			if len(out) == 0 {
-				// out = append(out, rule{head: head, body: []string{head}})
+				out = append(out, serialisedRule{head: head, body: []string{qualHead}})
 			} else {
 				for j := range out {
 					if len(out[j].body) == 0 {
 						continue // don't attach stuff to facts
 					}
 
-					out[j].body = append(out[j].body, head) // attach qualfified to rule
+					out[j].body = append(out[j].body, qualHead) // attach qualfified to rule
 				}
 			}
-			// qualHead := fmt.Sprint(mark, "Head(", element, ")")
 
 			// var tmp string
 			// if deps[i].max != -1 {
@@ -577,26 +577,30 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			var tmp string
 
-			min := deps[i].min
-			max := deps[i].max
+			minVal := deps[i].min
+			maxVal := deps[i].max
 
 			if deps[i].min != 0 {
 				if deps[i].max != -1 {
-					tmp = fmt.Sprint(atLeast, "Un(", min, "), not ", atLeast, "Un(", max+1, ")")
+					tmp = fmt.Sprint(atLeast, "Un(", minVal, "), not ", atLeast, "Un(", maxVal+1, ")")
 				} else {
-					tmp = fmt.Sprint(atLeast, "Un(", min, ")")
+					tmp = fmt.Sprint(atLeast, "Un(", minVal, ")")
 				}
 			} else {
 				if deps[i].max != -1 {
-					tmp = fmt.Sprint("not ", atLeast, "Un(", max+1, ")")
+					tmp = fmt.Sprint("not ", atLeast, "Un(", maxVal+1, ")")
 				} else {
 					tmp = "" // empty since trivially satisfied
 				}
 			}
 
 			qualifiedRule := serialisedRule{
-				head: head,
+				head: qualHead,
 				body: strings.Split(tmp, ", "),
+			}
+
+			if tmp == "" { // make rule body empty when the tmp body is just ""
+				qualifiedRule.body = nil
 			}
 
 			// tmp = fmt.Sprint("count", mark, "(X,K), not -count", mark, "Max(K)")
@@ -641,25 +645,26 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			externalRules = append(externalRules, qualifiedRule)
 			// attach facts to values to mark for counting
 			for i, v := range valuesSlice {
-				v_i := rewrite(v)
+				v1 := rewrite(v)
 				if i == 0 {
 					externalRules = append(externalRules,
-						serialisedRule{head: fmt.Sprint(mark, "(", 0, ", ", v_i, ")")})
+						serialisedRule{head: fmt.Sprint(mark, "(", 0, ", ", v1, ")")})
 					if i != len(valuesSlice)-1 {
-						v_ii := rewrite(valuesSlice[i+1])
+						// #nosec G602 -- guarded by i != len-1
+						v2 := rewrite(valuesSlice[i+1])
 						externalRules = append(externalRules, serialisedRule{
-							head: fmt.Sprint(mark, "(", v_i, ", ", v_ii, ")"),
+							head: fmt.Sprint(mark, "(", v1, ", ", v2, ")"),
 						})
 					}
 
 				} else if i == len(valuesSlice)-1 {
 					externalRules = append(externalRules, serialisedRule{
-						head: fmt.Sprint(mark, "(", v_i, ", ", 1, ")"),
+						head: fmt.Sprint(mark, "(", v1, ", ", 1, ")"),
 					})
 				} else {
-					v_ii := rewrite(valuesSlice[i+1])
+					v2 := rewrite(valuesSlice[i+1]) //gosec:disable G602 -- else-branch: i < len-1
 					externalRules = append(externalRules, serialisedRule{
-						head: fmt.Sprint(mark, "(", v_i, ", ", v_ii, ")"),
+						head: fmt.Sprint(mark, "(", v1, ", ", v2, ")"),
 					})
 				}
 			}
@@ -845,9 +850,9 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 			generalRuleNew := generalRule.rewrite("VAR", rewrite(element))
 			out.rules = append(out.rules, generalRuleNew)
 
-			var tempRules []serialisedRule // collection of all rules generated so far
+			// var tempRules []serialisedRule // collection of all rules generated so far
 			// expandRules for target if InternDep
-			tempRules = expandRules([]rdf.Term{element}, attrMap[0], deps, headerName+"INTERN", rewrite(element))
+			tempRules := expandRules([]rdf.Term{element}, attrMap[0], deps, headerName+"INTERN", rewrite(element))
 
 			out.rules = append(out.rules, tempRules...)
 		}
@@ -870,7 +875,7 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 				headerIndexName, err := s.GetLogNameFromQualName(header[index])
 				check(err)
 
-				tempRules = expandRules(values, attrMap[index], deps, headerIndexName, rewrite(element))
+				tempRules = append(tempRules, expandRules(values, attrMap[index], deps, headerIndexName, rewrite(element))...)
 			}
 			// }
 

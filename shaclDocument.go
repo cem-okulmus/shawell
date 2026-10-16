@@ -35,19 +35,18 @@ type dependency struct {
 	max       int           // used by qualifiedValueShape
 }
 
-
 type ShaclDocument struct {
-	shapeNames    map[string]Shape           // used to unwind references to shapes
-	condAnswers   map[string]Table[rdf.Term] // for each NodeShape, its (un)conditional answer
-	uncondAnswers map[string]Table[rdf.Term] // caches the results from unwinding
+	shapeNames       map[string]Shape           // used to unwind references to shapes
+	condAnswers      map[string]Table[rdf.Term] // for each NodeShape, its (un)conditional answer
+	uncondAnswers    map[string]Table[rdf.Term] // caches the results from unwinding
 	undefinedAnswers map[string]Table[rdf.Term] // nodes whose shape membership is undefined under well-founded semantics
-	targets       map[string]Table[rdf.Term] // the materialised targets of a given shape
-	depMap        map[string][]dependency    // stores for each shape the dependant shapes
-	answered      bool
-	materialised  bool
-	validated     bool
-	debug         bool
-	fromGraph     string
+	targets          map[string]Table[rdf.Term] // the materialised targets of a given shape
+	depMap           map[string][]dependency    // stores for each shape the dependant shapes
+	answered         bool
+	materialised     bool
+	validated        bool
+	debug            bool
+	fromGraph        string
 }
 
 func (s ShaclDocument) String() string {
@@ -188,9 +187,8 @@ Outer:
 // Parameters:
 //   - rdfGraph: RDF graph parsed from Turtle or other RDF format
 //   - fromGraph: the named graph URI where the data is stored
-//   - ep: SPARQL endpoint for executing shape validation queries
 //   - debug: enables debug output during parsing
-func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint, debug bool) (out ShaclDocument) {
+func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool) (out ShaclDocument) {
 	// var detected bool = true
 	out.shapeNames = make(map[string]Shape)
 	out.condAnswers = make(map[string]Table[rdf.Term])
@@ -295,7 +293,7 @@ func memSibling(aas Table[rdf.Term], b rdf.Term, sib []rdf.Term) bool {
 }
 
 // memListQual checks if a qualified constraint is satisfied for a list of terms with min/max cardinality bounds.
-func memListQual(aas Table[rdf.Term], b []rdf.Term, min, max int) bool {
+func memListQual(aas Table[rdf.Term], b []rdf.Term, minVal, maxVal int) bool {
 	count := 0
 	for _, e := range b {
 		out := mem(aas, e)
@@ -305,17 +303,17 @@ func memListQual(aas Table[rdf.Term], b []rdf.Term, min, max int) bool {
 	}
 
 	var out bool
-	if max != -1 {
-		out = (count >= min) && (count <= max)
+	if maxVal != -1 {
+		out = (count >= minVal) && (count <= maxVal)
 	} else {
-		out = (count >= min)
+		out = (count >= minVal)
 	}
 
 	return out
 }
 
 // memListQualSibling checks if qualified constraint is satisfied for a list with sibling terms and cardinality bounds.
-func memListQualSibling(aas Table[rdf.Term], b []rdf.Term, min, max int, siblings []rdf.Term) bool {
+func memListQualSibling(aas Table[rdf.Term], b []rdf.Term, minVal, maxVal int, siblings []rdf.Term) bool {
 	// fmt.Println("Vals to CHeck", b)
 	// fmt.Println("Siblings: ", siblings)
 	// fmt.Println("Min: ", min, " ", "max: ", max)
@@ -331,10 +329,10 @@ func memListQualSibling(aas Table[rdf.Term], b []rdf.Term, min, max int, sibling
 	}
 
 	var out bool
-	if max != -1 {
-		out = (count >= min) && (count <= max)
+	if maxVal != -1 {
+		out = (count >= minVal) && (count <= maxVal)
 	} else {
-		out = (count >= min)
+		out = (count >= minVal)
 	}
 
 	return out
@@ -465,12 +463,12 @@ func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool
 		}
 
 		for k := range out1[i].name {
-			isRec, new_deps := s.TransitiveClosureRec(out1[i].name[k].name, visited)
+			isRec, newDeps := s.TransitiveClosureRec(out1[i].name[k].name, visited)
 
 			if isRec {
-				return true, append(new_deps, out2...)
+				return true, append(newDeps, out2...)
 			}
-			for _, newDep := range new_deps {
+			for _, newDep := range newDeps {
 				newDep.originDep = &out1[i]
 				out2 = append(out2, newDep)
 			}
@@ -559,10 +557,9 @@ func removeDuplicate[T comparable](sliceList []T) []T {
 	return list
 }
 
-
 // GetAffectedIndices returns the indices in uncondTable of nodes affected by a dependency,
 // considering qualified value shape cardinality constraints (min/max) and sibling nodes.
-func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondTable Table[rdf.Term], min, max int, siblings *[]Shape) []rdf.Term {
+func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondTable Table[rdf.Term], minVal, maxVal int, siblings *[]Shape) []rdf.Term {
 	var affectedIndices []rdf.Term
 	var depTable Table[rdf.Term]
 
@@ -713,7 +710,7 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 				// fmt.Println("Got group ", target, " ", c, " ", uncondTableGrouped.GetGroupOfTarget(target, c))
 				// fmt.Println("Shape to CHeck", ref.name)
 
-				if memListQualSibling(depTable, uncondTableGrouped.GetGroupOfTarget(target, c), min, max, siblingValues) {
+				if memListQualSibling(depTable, uncondTableGrouped.GetGroupOfTarget(target, c), minVal, maxVal, siblingValues) {
 					// val, err := uncondTableGrouped.GetIndex(target)
 					// check(err)
 					// fmt.Println("Adding target ", target)
@@ -723,7 +720,7 @@ func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondT
 				if s.debug {
 					fmt.Println("|||||||", " GOING INTO NON disjointedness  PATH")
 				}
-				if memListQual(depTable, uncondTableGrouped.GetGroupOfTarget(target, c), min, max) {
+				if memListQual(depTable, uncondTableGrouped.GetGroupOfTarget(target, c), minVal, maxVal) {
 					// val, err := uncondTableGrouped.GetIndex(target)
 					// check(err)
 					affectedIndices = append(affectedIndices, target)
@@ -771,7 +768,6 @@ func (s *ShaclDocument) NodeIsShape(node rdf.Term, shape string) bool {
 	}
 	return false
 }
-
 
 // UnwindAnswer computes the unconditional answers
 func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
@@ -1071,14 +1067,14 @@ func (s *ShaclDocument) InvalidTargets(shape string, ep endpoint) Table[rdf.Term
 	// fmt.Println(targets)
 
 outer:
-	for t_row := range targets.IterRows() {
-		for n_row := range nodesWithShape.IterRows() {
-			if n_row[0].RawValue() == t_row[0].RawValue() {
+	for tRow := range targets.IterRows() {
+		for nRow := range nodesWithShape.IterRows() {
+			if nRow[0].RawValue() == tRow[0].RawValue() {
 				continue outer
 			}
 			// fmt.Println("Term ", n[0], " not equal to ", t[0])
 		}
-		out.content = append(out.content, t_row)
+		out.content = append(out.content, tRow)
 	}
 
 	// fmt.Println("My invalid targets for: ", shape)
@@ -1086,6 +1082,7 @@ outer:
 
 	return &out
 }
+
 // InvalidTargets compares the targets of a node shape against the decorated graph and
 // returns those targets that do not have this shape
 func (s *ShaclDocument) InvalidTargetLP(shape string, ep endpoint) Table[rdf.Term] {
@@ -1108,23 +1105,23 @@ func (s *ShaclDocument) InvalidTargetLP(shape string, ep endpoint) Table[rdf.Ter
 	targets := s.targets[shape]
 
 outer:
-	for t_row := range targets.IterRows() {
+	for tRow := range targets.IterRows() {
 
-		for n_row := range nodesWithShape.IterRows() {
-			if n_row[0].RawValue() == t_row[0].RawValue() {
+		for nRow := range nodesWithShape.IterRows() {
+			if nRow[0].RawValue() == tRow[0].RawValue() {
 				continue outer
 			}
 		}
 
 		if undefinedNodes != nil {
-			for n_row := range undefinedNodes.IterRows() {
-				if n_row[0].RawValue() == t_row[0].RawValue() {
+			for nRow := range undefinedNodes.IterRows() {
+				if nRow[0].RawValue() == tRow[0].RawValue() {
 					continue outer // undefined membership is not a violation
 				}
 			}
 		}
 
-		out.content = append(out.content, []rdf.Term{t_row[0]})
+		out.content = append(out.content, []rdf.Term{tRow[0]})
 	}
 
 	return &out

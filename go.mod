@@ -2,6 +2,8 @@ module github.com/cem-okulmus/shawell
 
 go 1.25
 
+toolchain go1.26.9
+
 require (
 	github.com/cem-okulmus/rdf2go-1 v0.1.6
 	github.com/fatih/color v1.15.0

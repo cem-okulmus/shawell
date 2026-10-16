@@ -15,7 +15,19 @@ import (
 	"github.com/knakk/sparql"
 )
 
-// GetTable returns from a query result a table, and a header of shape names
+type Unbound struct{}
+
+func (u Unbound) String() string {
+	return "unbound"
+}
+
+func (u Unbound) RawValue() string {
+	return ""
+}
+
+func (u Unbound) Equal(_ rdf.Term) bool {
+	return false
+}
 
 type stringer interface {
 	comparable
@@ -151,16 +163,6 @@ func (t *TableSimple[T]) Merge(other Table[T]) error {
 // GetTable converts a SPARQL query result into a TableSimple data structure.
 // Each column in the SPARQL result becomes a column in the table.
 func GetTable(r *sparql.Results) *TableSimple[rdf.Term] {
-	// for i := range r.Results.Bindings {
-	// 	for k, v := range r.Results.Bindings[i] {
-	// 		fmt.Println("Key ", k)
-
-	// 		fmt.Println("Type: ", v.Type)
-	// 		fmt.Println("Value: ", v.Value)
-	// 		fmt.Println("Lang: ", v.Lang)
-	// 		fmt.Println("DataType: ", v.DataType)
-	// 	}
-	// }
 
 	var resultTable [][]rdf.Term
 
@@ -171,36 +173,31 @@ func GetTable(r *sparql.Results) *TableSimple[rdf.Term] {
 	}
 
 	for _, t := range r.Solutions() {
-		// var tupleOrdered []rdf.Term = make([]rdf.Term, len(t))
 
 		tupleOrdered := make([]rdf.Term, len(r.Head.Vars))
 
 		for _, s := range r.Head.Vars {
 
-			v := t[s]
-			var err error
-			if v == nil {
-				v, err = rdfA.NewBlank(fmt.Sprint("blank", getCount()))
-				check(err)
-			}
-
-			// if v.String() == "" {
-			// 	continue
-			// }
-
 			var newTerm rdf.Term
 
-			switch vt := v.(type) {
-			case rdfA.Blank:
-				newTerm = rdf.BlankNode{ID: vt.String()} // cuts off the first two char, keeping for compat
-			case rdfA.IRI:
-				newTerm = rdf.Resource{URI: vt.String()}
-			case rdfA.Literal:
-				data := rdf.Resource{URI: vt.DataType.String()}
-				newTerm = rdf.Literal{Value: vt.String(), Datatype: data, Language: vt.Lang()}
+			v := t[s]
+			if v == nil {
+				newTerm = Unbound{} // set unbound variables to unbound type
+
+			} else {
+				switch vt := v.(type) {
+				case rdfA.Blank:
+					newTerm = rdf.BlankNode{ID: vt.String()} // knakk's String() strips the "_:" prefix
+				case rdfA.IRI:
+					newTerm = rdf.Resource{URI: vt.String()}
+				case rdfA.Literal:
+					data := rdf.Resource{URI: vt.DataType.String()}
+					newTerm = rdf.Literal{Value: vt.String(), Datatype: data, Language: vt.Lang()}
+				default:
+					log.Panicf("unexpected term type %T", v)
+				}
 			}
 
-			// tupleOrdered[ordering[k]] = res(v.String()) // needed since range over map unsorted
 			tupleOrdered[ordering[s]] = newTerm // needed since range over map unsorted
 		}
 
@@ -399,7 +396,7 @@ func (t *GroupedTable[T]) RemoveIndex(key T) error {
 	sort.Sort(sort.Reverse(sort.IntSlice(badIndices)))
 
 	for i := range badIndices {
-		t.content = remove(t.content, i)
+		t.content = remove(t.content, badIndices[i])
 	}
 
 	return nil
@@ -447,6 +444,12 @@ func (t *GroupedTable[T]) Regroup() {
 			_, ok := t.group[key]
 			if !ok {
 				t.group[key] = make(map[int][]T)
+			}
+			if _, ok := t.group[key][a]; !ok {
+				t.group[key][a] = []T{} // keep the column present, even if it stays empty
+			}
+			if _, unbound := any(row[a]).(Unbound); unbound {
+				continue
 			}
 			t.group[key][a] = append(t.group[key][a], row[a])
 

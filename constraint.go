@@ -264,10 +264,10 @@ type ValidationResult struct {
 	message                   map[string]rdf2go.Term // support language tags
 	otherValue                rdf2go.Term
 	indirect0                 rdf2go.Term
-	detail                    *ComplexResult
+	// detail                    *ComplexResult   // intended for richer VR support in future
 }
 
-type ComplexResult struct{}
+// type ComplexResult struct{}
 
 // QuotedString returns true if the input string is quoted (starts and ends with double quotes).
 func QuotedString(input string) (out bool) {
@@ -534,20 +534,18 @@ type ShapeRef struct {
 func (s ShapeRef) GetLogName() string {
 	if s.ref != nil {
 		return s.ref.GetLogName()
-	} else {
-		shape := s.doc.shapeNames[s.name]
-		return shape.GetLogName()
 	}
+	shape := s.doc.shapeNames[s.name]
+	return shape.GetLogName()
 }
 
 // GetQualName returns the qualified name (for variable naming in SPARQL queries) of a shape reference.
 func (s ShapeRef) GetQualName() string {
 	if s.ref != nil {
 		return s.ref.GetQualName()
-	} else {
-		shape := s.doc.shapeNames[s.name]
-		return shape.GetQualName()
 	}
+	shape := s.doc.shapeNames[s.name]
+	return shape.GetQualName()
 }
 
 // IsBlank returns true if the shape reference points to a blank node.
@@ -870,7 +868,7 @@ func (v ValueTypeConstraint) SparqlBodyValidation(obj string, path PropertyPath)
 
 // ExtractValueTypeConstraint extracts a value type constraint (sh:class, sh:datatype, sh:nodeKind.)
 // from an RDF triple in a SHACL document.
-func ExtractValueTypeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out ValueTypeConstraint, err error) {
+func ExtractValueTypeConstraint(triple *rdf2go.Triple) (out ValueTypeConstraint, err error) {
 	id := getCount()
 	switch triple.Predicate.RawValue() {
 	case _sh + "class":
@@ -1142,7 +1140,7 @@ func (v ValueRangeConstraint) SparqlBodyValidation(obj string, path PropertyPath
 
 // ExtractValueRangeConstraint extracts a value range constraint
 // (sh:minExclusive, sh:maxExclusive, sh:minInclusive, sh:maxInclusive)
-func ExtractValueRangeConstraint(graph *rdf2go.Graph, triple *rdf2go.Triple) (out ValueRangeConstraint, err error) {
+func ExtractValueRangeConstraint(triple *rdf2go.Triple) (out ValueRangeConstraint, err error) {
 	id := getCount()
 	switch triple.Predicate.RawValue() {
 	case _sh + "minExclusive":
@@ -1771,13 +1769,12 @@ const (
 // OtherConstraint represents a SHACL constraint that does not fit into the other categories,
 // such as sh:closed, sh:hasValue, and sh:in.
 type OtherConstraint struct {
-	oc           Other
-	graph        *rdf2go.Graph // needed for path extraction for the closedness constraint
+	oc Other
+	// graph        *rdf2go.Graph // needed for path extraction for the closedness constraint
 	closed       bool
 	allowedPaths *[]string
-	terms        []rdf2go.Term // overloaded, for in/hasValue this collects the terms to match, for closed
-	// it matches the ignoredProperties
-	id int64 // used to create unique references in Sparql translation
+	terms        []rdf2go.Term // for in/hasValue: the terms to match, for closed: the sh:ignoredProperties
+	id           int64         // used to create unique references in Sparql translation
 }
 
 func (v OtherConstraint) GetSubConstraints() []Constraint {
@@ -3029,7 +3026,7 @@ func (t TargetNode) String() string {
 	return t.node.RawValue()
 }
 
-func ExtractTargetExpression(graph *rdf2go.Graph, triple *rdf2go.Triple) (out TargetExpression, err error) {
+func ExtractTargetExpression(triple *rdf2go.Triple) (out TargetExpression, err error) {
 	switch triple.Predicate.RawValue() {
 	case _sh + "targetNode":
 		out = TargetNode{triple.Object}
@@ -3055,9 +3052,8 @@ func GetTargetTerm(t TargetExpression) string {
 		if t.indirection != nil {
 			after = fmt.Sprint("\n?indirect", t.level, " ", (*t.indirection).PropertyString(), " ?sub .")
 			return (strings.ReplaceAll(GetTargetTerm(t.actual), "?sub", fmt.Sprint("?indirect", t.level))) + after
-		} else {
-			return GetTargetTerm(t.actual)
 		}
+		return GetTargetTerm(t.actual)
 	case TargetClass:
 		queryBody = "?sub <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>/<http://www.w3.org/2000/01/rdf-schema#subClassOf>* NODE ."
 		queryBody = strings.ReplaceAll(queryBody, "NODE", t.class.String())
@@ -3091,10 +3087,9 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 			return out, errors.New(fmt.Sprint("Shape term ", term.String(), " parsed before as PropertyShape"))
 		}
 		return out, nil
-	} else {
-		if insideProp == nil {
-			s.shapeNames[term.RawValue()] = &out
-		}
+	}
+	if insideProp == nil {
+		s.shapeNames[term.RawValue()] = &out
 	}
 
 	var viaPath *PropertyPath
@@ -3112,7 +3107,7 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 		switch triples[i].Predicate.RawValue() {
 		// target expressions
 		case _sh + "targetClass", _sh + "targetNode", _sh + "targetObjectsOf", _sh + "targetSubjectsOf":
-			te, err2 := ExtractTargetExpression(graph, triples[i])
+			te, err2 := ExtractTargetExpression(triples[i])
 			if err2 != nil {
 				log.Println(err2)
 				continue
@@ -3120,7 +3115,7 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 			out.target = append(out.target, te)
 		// ValueTypes constraints
 		case _sh + "class", _sh + "datatype", _sh + "nodeKind":
-			vt, err2 := ExtractValueTypeConstraint(graph, triples[i])
+			vt, err2 := ExtractValueTypeConstraint(triples[i])
 			if err2 != nil {
 				log.Println(err2)
 				continue
@@ -3128,7 +3123,7 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf2go.Graph, term rdf2go.Term, insi
 			out.valuetypes = append(out.valuetypes, vt)
 		// ValueRanges constraints
 		case _sh + "minExclusive", _sh + "maxExclusive", _sh + "minInclusive", _sh + "maxInclusive":
-			vr, err2 := ExtractValueRangeConstraint(graph, triples[i])
+			vr, err2 := ExtractValueRangeConstraint(triples[i])
 			if err2 != nil {
 				log.Println(err2)
 				continue
@@ -3429,9 +3424,8 @@ func (s *ShaclDocument) DefineSiblingValues(shape string, qualShape string) (*[]
 			}
 
 			return &out, nil
-		} else {
-			return nil, nil
 		}
+		return nil, nil
 
 	case *PropertyShape:
 		// check if there is a qualifiedValueShape with disjointedness present:
@@ -3459,9 +3453,8 @@ func (s *ShaclDocument) DefineSiblingValues(shape string, qualShape string) (*[]
 			}
 
 			return &out, nil
-		} else {
-			return nil, nil
 		}
+		return nil, nil
 
 	}
 

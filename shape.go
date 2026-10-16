@@ -99,17 +99,8 @@ func (n *NodeShape) AddIndirectTargets(indirect []TargetIndirect, viaPath *Prope
 }
 
 // GetConstraints returns all constraint instantiations for the node shape that need to be validated.
-func (n *NodeShape) GetConstraints(propertyName string, path PropertyPath, obj string, targetsFromParent *[]TargetExpression) (out []ConstraintInstantiation) {
+func (n *NodeShape) GetConstraints(path PropertyPath, obj string, targetsFromParent *[]TargetExpression) (out []ConstraintInstantiation) {
 	var shapeName rdf.Term = n.IRI
-	// if propertyName != "" {
-	// 	shapeName = propertyName
-	// } else {
-	// 	if n.IsBlank() {
-	// 		shapeName = "_:" + n.IRI
-	// 	} else {
-	// 		shapeName = n.GetIRI()
-	// 	}
-	// }
 
 	// fmt.Println("Using shapename: ", shapeName)
 
@@ -199,7 +190,7 @@ func (n *NodeShape) GetConstraints(propertyName string, path PropertyPath, obj s
 // GetValidationReport computes validation results for a node shape by checking all its constraints.
 // Returns whether the shape is satisfied and a list of validation results for any violations.
 func (s ShaclDocument) GetValidationReport(n *NodeShape, ep endpoint) (result bool, reports []ValidationResult) {
-	constraints := n.GetConstraints("", nil, "?sub", nil)
+	constraints := n.GetConstraints(nil, "?sub", nil)
 
 	if s.debug {
 		fmt.Println("NodeShape: ", n.IRI, " number of constraints ", len(constraints))
@@ -690,7 +681,7 @@ func (p *PropertyShape) GetConstraints(num int, targetsFromParent *[]TargetExpre
 	uniqObj := fmt.Sprint("?InnerObj", num)
 
 	// Constraints inherited from NodeShape
-	out = append(out, p.shape.GetConstraints(p.name, p.path, uniqObj, targetsFromParent)...)
+	out = append(out, p.shape.GetConstraints(p.path, uniqObj, targetsFromParent)...)
 
 	return out
 }

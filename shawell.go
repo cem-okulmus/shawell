@@ -54,7 +54,7 @@ func check(e error) {
 // 	return rdf.NewResource(s)
 // }
 
-var prefixes map[string]string = make(map[string]string)
+var prefixes = make(map[string]string)
 
 // making it easier to define proper terms
 var (
@@ -228,7 +228,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 	}
 
 	var c timeComposer
-	start := time.Now()
+	var start time.Time
 	var d time.Duration
 	var msec float64
 
@@ -414,7 +414,8 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 	if !silent && !omitVR && vrOutFile == nil {
 		fmt.Println("VALIDATION REPORT: \n", abbr(actual.String()))
 	} else if vrOutFile != nil {
-		vrOutFile.WriteString(actual.String())
+		_, err := vrOutFile.WriteString(actual.String())
+		check(err)
 	}
 
 	if config.timer {
@@ -650,7 +651,7 @@ func main() {
 
 	var vrOutFile *os.File
 	if opts.OutputVR != "" {
-		vrOutFile, err = os.OpenFile(string(opts.OutputVR), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		vrOutFile, err = os.OpenFile(string(opts.OutputVR), os.O_CREATE|os.O_WRONLY, 0o644)
 		check(err)
 		defer vrOutFile.Close()
 	}
@@ -712,9 +713,9 @@ func main() {
 		graphName = "<" + _sh + fileName + ">"
 	}
 
-	parsedDoc := GetShaclDocument(g2, graphName, endpoint, opts.Debug)
+	parsedDoc := GetShaclDocument(g2, graphName, opts.Debug)
 
-	if opts.ForceLP || opts.DemoOutputLP {
+	if opts.DemoOutputLP {
 		demoLP = true
 	}
 
@@ -748,6 +749,7 @@ func main() {
 
 	// If needed, clean up the named graph afterwards
 	if opts.DataIncluded && !opts.ReuseData {
-		endpoint.ClearGraph(parsedDoc.fromGraph)
+		err = endpoint.ClearGraph(parsedDoc.fromGraph)
+		check(err)
 	}
 }

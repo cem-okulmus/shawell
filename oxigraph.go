@@ -39,14 +39,14 @@ func StartOxigraph(debug bool) (ep *SparqlEndpoint, cleanup func(), err error) {
 	}
 
 	if err = cmd.Start(); err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		return nil, nil, fmt.Errorf("starting oxigraph: %w", err)
 	}
 
 	cleanup = func() {
 		cmd.Process.Kill() //nolint:errcheck
-		cmd.Wait()         //nolint:errcheck
-		os.RemoveAll(tmpDir)
+		_ = cmd.Wait()     //nolint:errcheck
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	baseURL := fmt.Sprintf("http://%s", addr)
@@ -100,7 +100,7 @@ func waitForOxigraph(baseURL string) error {
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(probe)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode < 500 {
 				return nil
 			}

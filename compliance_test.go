@@ -1,3 +1,4 @@
+// Aims to test compliance with SHACL 1.0 standard
 package main
 
 import (
@@ -280,12 +281,12 @@ func ComplianceOxigraph(t *testing.T, forceLP bool) EARLReport {
 }
 
 func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEndpoint, earlInfo string) EARLReport {
-	var tests []string = CoreTests()
+	var tests = CoreTests()
 
 	countPassed := 0
 	countPartial := 0
 
-	var basedir string = "resources/W3_SHACL_Test_Suite_Core"
+	var basedir = "resources/W3_SHACL_Test_Suite_Core"
 
 	earl := EARLReport{
 		validatorName:       rdf.NewResource("https://github.com/cem-okulmus/shawell"),
@@ -330,7 +331,7 @@ func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEn
 		res := ep.Insert(g2, "<"+_sh+fileName+">", false)
 		check(res)
 		graphName = "<" + _sh + fileName + ">"
-		parsedDoc := GetShaclDocument(g2, graphName, ep, false)
+		parsedDoc := GetShaclDocument(g2, graphName, false)
 		parsedDoc.debug = false
 		activeDoc = &parsedDoc
 
