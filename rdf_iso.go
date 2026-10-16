@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	rdf2go "github.com/cem-okulmus/rdf2go-1"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 )
 
 // rdfTurtleIsomorphic parses two Turtle documents and tests them for RDF isomorphism.
@@ -19,8 +19,8 @@ import (
 //
 // Returns false if either document fails to parse.
 func rdfTurtleIsomorphic(turtle1, turtle2 string) bool {
-	g1 := rdf2go.NewGraph("")
-	g2 := rdf2go.NewGraph("")
+	g1 := rdf.NewGraph("")
+	g2 := rdf.NewGraph("")
 	if err := g1.Parse(strings.NewReader(turtle1), "text/turtle"); err != nil {
 		return false
 	}
@@ -33,8 +33,8 @@ func rdfTurtleIsomorphic(turtle1, turtle2 string) bool {
 // collectTriples drains IterTriples into a slice. rdf2go's All(nil,nil,nil) has a
 // missing branch and returns nothing when all three pattern terms are nil, so we use
 // IterTriples directly.
-func collectTriples(g *rdf2go.Graph) []*rdf2go.Triple {
-	var out []*rdf2go.Triple
+func collectTriples(g *rdf.Graph) []*rdf.Triple {
+	var out []*rdf.Triple
 	for t := range g.IterTriples() {
 		out = append(out, t)
 	}
@@ -42,9 +42,9 @@ func collectTriples(g *rdf2go.Graph) []*rdf2go.Triple {
 }
 
 // isBlankT reports whether term is a blank node.
-func isBlankT(t rdf2go.Term) bool {
+func isBlankT(t rdf.Term) bool {
 	switch t.(type) {
-	case *rdf2go.BlankNode, rdf2go.BlankNode:
+	case *rdf.BlankNode, rdf.BlankNode:
 		return true
 	}
 	return false
@@ -52,19 +52,19 @@ func isBlankT(t rdf2go.Term) bool {
 
 // tripleKey returns a canonical string key for a triple whose terms are already in
 // their final form (no pending bijection substitution needed).
-func tripleKey(t *rdf2go.Triple) string {
+func tripleKey(t *rdf.Triple) string {
 	return t.Subject.String() + "\x00" + t.Predicate.String() + "\x00" + t.Object.String()
 }
 
 // triplesIsomorphic is the entry point for comparing two sets of triples.
-func triplesIsomorphic(t1, t2 []*rdf2go.Triple) bool {
+func triplesIsomorphic(t1, t2 []*rdf.Triple) bool {
 	if len(t1) != len(t2) {
 		return false
 	}
 
 	// Partition into ground triples (no blank nodes) and those containing blank nodes.
-	var ground1, bn1 []*rdf2go.Triple
-	var ground2, bn2 []*rdf2go.Triple
+	var ground1, bn1 []*rdf.Triple
+	var ground2, bn2 []*rdf.Triple
 	for _, t := range t1 {
 		if isBlankT(t.Subject) || isBlankT(t.Object) {
 			bn1 = append(bn1, t)
@@ -113,7 +113,7 @@ func triplesIsomorphic(t1, t2 []*rdf2go.Triple) bool {
 }
 
 // sameTripleSet reports whether a and b contain the same multiset of triples.
-func sameTripleSet(a, b []*rdf2go.Triple) bool {
+func sameTripleSet(a, b []*rdf.Triple) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -137,7 +137,7 @@ func sameTripleSet(a, b []*rdf2go.Triple) bool {
 // (because they incorporate the previous round's hashes) even though the partition
 // {b1},{b2} is already stable after round 1. We stop when the equivalence relation
 // "same signature" is unchanged between two consecutive rounds.
-func stableSignatures(triples []*rdf2go.Triple) map[string]string {
+func stableSignatures(triples []*rdf.Triple) map[string]string {
 	sigs := make(map[string]string)
 	for _, t := range triples {
 		if isBlankT(t.Subject) {
@@ -184,7 +184,7 @@ func samePartition(a, b map[string]string) bool {
 // reference to the other side — either the ground term's string or the previous
 // round's signature for a blank node neighbor. The sorted list of these descriptors
 // is SHA-256 hashed to produce the new signature.
-func oneRound(triples []*rdf2go.Triple, prev map[string]string) map[string]string {
+func oneRound(triples []*rdf.Triple, prev map[string]string) map[string]string {
 	parts := make(map[string][]string, len(prev))
 	for id := range prev {
 		parts[id] = nil
@@ -253,7 +253,7 @@ func nextUnassigned(bySig1, bySig2 map[string][]string, bij map[string]string) (
 // complete bijection against the actual triple sets. Within each signature group,
 // all permutations are tried if necessary (required only when multiple blank nodes
 // share an identical WL signature, which does not occur for SHACL validation reports).
-func searchBijection(t1, t2 []*rdf2go.Triple, bySig1, bySig2 map[string][]string, bij map[string]string) bool {
+func searchBijection(t1, t2 []*rdf.Triple, bySig1, bySig2 map[string][]string, bij map[string]string) bool {
 	pick, pool := nextUnassigned(bySig1, bySig2, bij)
 	if pick == "" {
 		return bijectionValid(t1, t2, bij)
@@ -279,8 +279,8 @@ func searchBijection(t1, t2 []*rdf2go.Triple, bySig1, bySig2 map[string][]string
 // bijectionValid applies bij to every triple in t1 (substituting each blank node ID
 // with its mapped counterpart) and checks that the resulting multiset of triples
 // equals t2.
-func bijectionValid(t1, t2 []*rdf2go.Triple, bij map[string]string) bool {
-	applyBij := func(term rdf2go.Term) string {
+func bijectionValid(t1, t2 []*rdf.Triple, bij map[string]string) bool {
+	applyBij := func(term rdf.Term) string {
 		if isBlankT(term) {
 			if mapped, ok := bij[term.RawValue()]; ok {
 				return "_:" + mapped
