@@ -35,12 +35,12 @@ type dependency struct {
 	max       int           // used by qualifiedValueShape
 }
 
-var Empty struct{}
 
 type ShaclDocument struct {
 	shapeNames    map[string]Shape           // used to unwind references to shapes
 	condAnswers   map[string]Table[rdf.Term] // for each NodeShape, its (un)conditional answer
 	uncondAnswers map[string]Table[rdf.Term] // caches the results from unwinding
+	undefinedAnswers map[string]Table[rdf.Term] // nodes whose shape membership is undefined under well-founded semantics
 	targets       map[string]Table[rdf.Term] // the materialised targets of a given shape
 	depMap        map[string][]dependency    // stores for each shape the dependant shapes
 	answered      bool
@@ -116,6 +116,7 @@ func (s ShaclDocument) String() string {
 	return abbr(sb.String())
 }
 
+// GetSubjectFromTriples extracts all unique subject terms from a slice of RDF triples.
 func GetSubjectFromTriples(triples []*rdf.Triple) (subjects []rdf.Term) {
 	for i := range triples {
 		subjects = append(subjects, triples[i].Subject)
@@ -123,47 +124,49 @@ func GetSubjectFromTriples(triples []*rdf.Triple) (subjects []rdf.Term) {
 	return subjects
 }
 
+// GetNodeTerms returns all terms that appear in the SHACL document as the subject of a triple
+// appearing inside a SHACL node shape.
 func GetNodeTerms(graph *rdf.Graph) []rdf.Term {
-	out := GetSubjectFromTriples(graph.All(nil, ResA, res(_sh+"NodeShape")))
+	out := GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_rdf+"type"), rdf.NewResource(_sh+"NodeShape")))
 
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"targetClass"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"targetNode"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"targetObjectsOf"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"targetSubjectsOf"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"class"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"datatype"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"nodeKind"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"minExclusive"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"maxExclusive"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"minInclusive"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"maxInclusive"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"minLength"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"maxLength"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"pattern"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"languageIn"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"equals"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"disjoint"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"lessThan"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"lessThanOrEquals"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"property"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"and"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"or"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"not"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"xone"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"node"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"qualifiedValueShape"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"closed"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"hasValue"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"in"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"severity"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"message"), nil))...)
-	out = append(out, GetSubjectFromTriples(graph.All(nil, res(_sh+"deactivated"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"targetClass"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"targetNode"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"targetObjectsOf"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"targetSubjectsOf"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"class"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"datatype"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"nodeKind"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"minExclusive"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"maxExclusive"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"minInclusive"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"maxInclusive"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"minLength"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"maxLength"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"pattern"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"languageIn"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"equals"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"disjoint"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"lessThan"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"lessThanOrEquals"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"property"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"and"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"or"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"not"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"xone"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"node"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"qualifiedValueShape"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"closed"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"hasValue"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"in"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"severity"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"message"), nil))...)
+	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"deactivated"), nil))...)
 
 	out = removeDuplicate(out)
 
 	// remove anything that has path
 
-	pathStuff := GetSubjectFromTriples(graph.All(nil, res(_sh+"path"), nil))
+	pathStuff := GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"path"), nil))
 
 	var finalOut []rdf.Term
 
@@ -180,11 +183,19 @@ Outer:
 	return finalOut
 }
 
+// GetShaclDocument parses an RDF graph containing a SHACL document and extracts all defined shapes.
+// It returns a fully initialized ShaclDocument with shapes indexed by their IRIs, ready for validation.
+// Parameters:
+//   - rdfGraph: RDF graph parsed from Turtle or other RDF format
+//   - fromGraph: the named graph URI where the data is stored
+//   - ep: SPARQL endpoint for executing shape validation queries
+//   - debug: enables debug output during parsing
 func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint, debug bool) (out ShaclDocument) {
 	// var detected bool = true
 	out.shapeNames = make(map[string]Shape)
 	out.condAnswers = make(map[string]Table[rdf.Term])
 	out.uncondAnswers = make(map[string]Table[rdf.Term])
+	out.undefinedAnswers = make(map[string]Table[rdf.Term])
 	out.targets = make(map[string]Table[rdf.Term])
 	out.depMap = make(map[string][]dependency)
 	out.materialised = false
@@ -202,7 +213,7 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint, debug 
 		out.GetNodeShape(rdfGraph, t, nil)
 	}
 
-	PropertyShapeTriples := rdfGraph.All(nil, res(_sh+"path"), nil)
+	PropertyShapeTriples := rdfGraph.All(nil, rdf.NewResource(_sh+"path"), nil)
 	// fmt.Println(res(sh+"NodeShape"), " of node shapes, ", NodeShapeTriples)
 
 	for _, t := range PropertyShapeTriples {
@@ -226,7 +237,7 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint, debug 
 
 	// attach indirect Targets (hope this pointer stuff works)
 	for k, v := range out.depMap {
-		tmp := out.shapeNames[k].GetTargets()
+		tmp := out.shapeNames[k].GetTargets(true)
 
 		for _, dep := range v {
 			for _, s := range dep.name {
@@ -250,41 +261,6 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, ep endpoint, debug 
 	return out
 }
 
-// func GetTransitiveClosure(depMap map[string][]dependency) map[string][]dependency {
-// 	somethingChanged := true
-
-// 	for somethingChanged {
-// 		somethingChanged = false
-
-// 		for k, v := range depMap {
-
-// 			existingDeps := v
-
-// 			var newDeps []dependency
-
-// 		outer:
-// 			for i := range v {
-// 				for j := range existingDeps {
-// 					if reflect.DeepEqual(v[i], existingDeps[j]) {
-// 						continue outer
-// 					}
-// 				}
-// 				newDeps = append(newDeps, v[i])
-// 			}
-
-// 			if len(newDeps) > 0 {
-// 				somethingChanged = true
-// 			}
-
-// 			depMap[k] = append(v, newDeps...)
-// 		}
-// 	}
-
-// 	fmt.Println("DepMap after Closure ", depMap)
-
-// 	return depMap
-// }
-
 // mem checks if an integer b occurs inside a slice as
 func mem(aas Table[rdf.Term], b rdf.Term) bool {
 	for as := range aas.IterRows() {
@@ -299,7 +275,7 @@ func mem(aas Table[rdf.Term], b rdf.Term) bool {
 	return false
 }
 
-// mem checks if an integer b occurs inside a slice as
+// memSibling checks if sibling terms of b occur in the table.
 func memSibling(aas Table[rdf.Term], b rdf.Term, sib []rdf.Term) bool {
 	for as := range aas.IterRows() {
 	inner:
@@ -318,7 +294,7 @@ func memSibling(aas Table[rdf.Term], b rdf.Term, sib []rdf.Term) bool {
 	return false
 }
 
-// memListOne returns true, if exactly one element is included
+// memListQual checks if a qualified constraint is satisfied for a list of terms with min/max cardinality bounds.
 func memListQual(aas Table[rdf.Term], b []rdf.Term, min, max int) bool {
 	count := 0
 	for _, e := range b {
@@ -338,7 +314,7 @@ func memListQual(aas Table[rdf.Term], b []rdf.Term, min, max int) bool {
 	return out
 }
 
-// memListOne returns true, if exactly one element is included
+// memListQualSibling checks if qualified constraint is satisfied for a list with sibling terms and cardinality bounds.
 func memListQualSibling(aas Table[rdf.Term], b []rdf.Term, min, max int, siblings []rdf.Term) bool {
 	// fmt.Println("Vals to CHeck", b)
 	// fmt.Println("Siblings: ", siblings)
@@ -364,7 +340,7 @@ func memListQualSibling(aas Table[rdf.Term], b []rdf.Term, min, max int, sibling
 	return out
 }
 
-// memListOne returns true, if exactly one element is included
+// memListXone checks if exactly one shape in the list of tables contains the term.
 func memListXone(toCheck []Table[rdf.Term], b []rdf.Term) bool {
 	// elements := strings.Split(b.RawValue(), " ")
 	for _, e := range b {
@@ -385,7 +361,7 @@ func memListXone(toCheck []Table[rdf.Term], b []rdf.Term) bool {
 	return true
 }
 
-// memListOne returns true, if any one element is included
+// memListOr checks if at least one shape in the list of tables contains the term.
 func memListOr(toCheck []Table[rdf.Term], b []rdf.Term) bool {
 	// elements := strings.Split(b.RawValue(), " ")
 
@@ -419,7 +395,7 @@ func memListOne(aas Table[rdf.Term], b []rdf.Term) bool {
 	return false
 }
 
-// memList returns true, if all elements are included
+// memListAll checks if all terms from list b occur in the table.
 func memListAll(aas Table[rdf.Term], b []rdf.Term) bool {
 	// elements := strings.Split(b.RawValue(), " ")
 
@@ -433,11 +409,14 @@ func memListAll(aas Table[rdf.Term], b []rdf.Term) bool {
 	return true
 }
 
-// UnwindDependencies computes the trans. closure of deps among node shapes
+// TransitiveClosure computes the transitive closure of dependencies for a named shape,
+// returning whether the shape has recursive dependencies and the full transitive closure.
 func (s ShaclDocument) TransitiveClosure(name string) (bool, []dependency) {
 	return s.TransitiveClosureRec(name, []string{})
 }
 
+// DepToIndirectTarget converts a single dependency into an indirect target expression
+// for use in conditional answer computation.
 func DepToIndirectTarget(dep dependency, actual TargetExpression) TargetIndirect {
 	var out TargetIndirect
 
@@ -459,6 +438,8 @@ func DepToIndirectTarget(dep dependency, actual TargetExpression) TargetIndirect
 	return out
 }
 
+// TransitiveClosureRec recursively computes the transitive closure of dependencies,
+// tracking visited shapes to avoid infinite recursion.
 func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool, []dependency) {
 	var out1, out2 []dependency
 
@@ -500,16 +481,20 @@ func (s ShaclDocument) TransitiveClosureRec(name string, visited []string) (bool
 	return false, out2
 }
 
-func removeSimple[T stringer](s []T, i int) []T {
-	s[i] = s[len(s)-1]
-	return s[:len(s)-1]
-}
+// func removeSimple[T stringer](s []T, i int) []T {
+// 	s[i] = s[len(s)-1]
+// 	return s[:len(s)-1]
+// }
 
+// removes the element at index i from a 2D slice.
 func remove[T stringer](s [][]T, i int) [][]T {
 	s[i] = s[len(s)-1]
 	return s[:len(s)-1]
 }
 
+// AllCondAnswers computes conditional answers for all node shapes in the document.
+// A conditional answer indicates which focus nodes satisfy a shape's constraints,
+// conditioned on whether other shapes are satisfied.
 func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 	if s.debug {
 		fmt.Println("Started AllCondAnswers")
@@ -529,7 +514,7 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 			continue
 		}
 		// if no targets defined for a shape, then skip it (nothing to query, nothing to check)
-		if len(v.GetTargets()) == 0 {
+		if len(v.GetTargets(true)) == 0 {
 			continue
 		}
 
@@ -545,6 +530,7 @@ func (s *ShaclDocument) AllCondAnswers(ep endpoint) {
 	s.answered = true
 }
 
+// removeDuplicateVR removes duplicate validation results from a slice.
 func removeDuplicateVR(sliceList []ValidationResult) []ValidationResult {
 	allKeys := make(map[string]bool)
 	list := []ValidationResult{}
@@ -558,6 +544,7 @@ func removeDuplicateVR(sliceList []ValidationResult) []ValidationResult {
 	return list
 }
 
+// removeDuplicate removes duplicate elements from a comparable slice.
 func removeDuplicate[T comparable](sliceList []T) []T {
 	allKeys := make(map[T]bool)
 	list := []T{}
@@ -572,90 +559,9 @@ func removeDuplicate[T comparable](sliceList []T) []T {
 	return list
 }
 
-type Kinds int8
 
-const (
-	inA Kinds = iota
-	inB
-	inBoth
-)
-
-func symmetricDiff[T comparable](sliceListA, sliceListB []T) []T {
-	allKeys := make(map[T]Kinds)
-	list := []T{}
-	for _, item := range sliceListA { // map now knows all As
-		if _, ok := allKeys[item]; !ok {
-			allKeys[item] = inA
-		}
-	}
-	for _, item := range sliceListB { // set all entries in map to false that are also in B
-		value, ok := allKeys[item]
-		if !ok {
-			allKeys[item] = inB
-		} else {
-			switch value {
-			case inA:
-				allKeys[item] = inBoth
-			case inB:
-				// skip since duplicate
-			}
-		}
-	}
-
-	for k, v := range allKeys {
-		if v != inBoth {
-			list = append(list, k)
-		}
-	}
-
-	return list
-}
-
-func (s *ShaclDocument) GetIndirectTargets(ref ShapeRef, dep dependency, condTable Table[rdf.Term]) (bool, int, bool) {
-	// var indirectTargets []rdf.Term
-
-	var c int // column to compare
-
-	if dep.external {
-		found := false
-		for i, h := range condTable.GetHeader() {
-			if strings.HasSuffix(h, dep.origin) {
-				found = true
-				c = i
-			}
-		}
-		if !found {
-			log.Panic("Couldn't find dep ", dep.name, " with origin ", dep.origin, " inside ", condTable.GetHeader())
-		}
-	} else {
-		c = 0 // intrinsic checks are made against the node shape itself
-	}
-
-	existIndirectTargets := false
-
-	// fmt.Println("Dep ", dep.name, " is of type list: ", isList)
-
-	for row := range condTable.IterRows() {
-		cont := row[c]
-		splitCont := strings.Split(cont.RawValue(), " ")
-
-		if len(splitCont) > 0 {
-			existIndirectTargets = true
-
-			// fmt.Println("||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
-			// fmt.Println("||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
-			// fmt.Println("CONTENT: \n", condTable)
-			// fmt.Println("||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
-			// fmt.Println("||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
-
-			break
-		}
-
-	}
-
-	return existIndirectTargets, c - 1, dep.external
-}
-
+// GetAffectedIndices returns the indices in uncondTable of nodes affected by a dependency,
+// considering qualified value shape cardinality constraints (min/max) and sibling nodes.
 func (s *ShaclDocument) GetAffectedIndices(ref ShapeRef, dep dependency, uncondTable Table[rdf.Term], min, max int, siblings *[]Shape) []rdf.Term {
 	var affectedIndices []rdf.Term
 	var depTable Table[rdf.Term]
@@ -866,17 +772,6 @@ func (s *ShaclDocument) NodeIsShape(node rdf.Term, shape string) bool {
 	return false
 }
 
-func intersect(one []int, other []int) (out []int) {
-	for i := range one {
-		for j := range other {
-			if one[i] == other[j] {
-				out = append(out, one[i])
-			}
-		}
-	}
-
-	return removeDuplicate[int](out)
-}
 
 // UnwindAnswer computes the unconditional answers
 func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
@@ -1062,7 +957,7 @@ func (s *ShaclDocument) GetTargetShape(name string) (out []SparqlQueryFlat, empt
 		log.Panic(name, " is not a defined node  shape")
 	}
 
-	targets := ns.GetTargets()
+	targets := ns.GetTargets(true)
 
 	out = TargetsToQueries(targets)
 
@@ -1075,7 +970,7 @@ func (s *ShaclDocument) GetValidTargetShape(name string) (out []SparqlQueryFlat,
 		log.Panic(name, " is not a defined node  shape")
 	}
 
-	targets := ns.GetValidationTargets()
+	targets := ns.GetTargets(false)
 
 	out = TargetsToQueries(targets)
 
@@ -1191,56 +1086,44 @@ outer:
 
 	return &out
 }
-
 // InvalidTargets compares the targets of a node shape against the decorated graph and
 // returns those targets that do not have this shape
-func (s *ShaclDocument) InvalidTargetLP(shape string, LPTables []Table[rdf.Term], ep endpoint) Table[rdf.Term] {
+func (s *ShaclDocument) InvalidTargetLP(shape string, ep endpoint) Table[rdf.Term] {
 	var out TableSimple[rdf.Term]
 	if !s.materialised {
 		s.MaterialiseTargets(ep)
 	}
 
-	var nodesWithShape Table[rdf.Term] = &TableSimple[rdf.Term]{}
-
 	shapeObj := s.shapeNames[shape]
 
-	// nodesWithShape , found :=
-
-	for i := range LPTables {
-		if len(LPTables[i].GetHeader()) != 1 {
-			log.Panicln("Logic Table with more than one result returned, somehow!")
-		}
-
-		header := LPTables[i].GetHeader()[0]
-		if strings.EqualFold(header, shape) {
-			nodesWithShape = LPTables[i]
-			// fmt.Println("For shape ", shape, ", found this LPTable", LPTables[i])
-			break
-		}
+	nodesWithShape, found := s.uncondAnswers[shape]
+	if !found {
+		nodesWithShape = &TableSimple[rdf.Term]{}
 	}
 
-	// fmt.Println("Answers: ", len(nodesWithShape.content))
-
-	// targets := s.GetTargets(shape, ep)
-	// if !hasTargets {
-	// 	return out, false
-	// }
+	undefinedNodes, _ := s.undefinedAnswers[shape]
 
 	out.header = append(out.header, "Not "+shapeObj.GetIRI())
 
 	targets := s.targets[shape]
 
 outer:
-	for t_row := range targets.IterRows() { // will this work?
+	for t_row := range targets.IterRows() {
 
 		for n_row := range nodesWithShape.IterRows() {
 			if n_row[0].RawValue() == t_row[0].RawValue() {
-				// fmt.Println("Found ", term, " in the answer")
 				continue outer
 			}
 		}
-		// fmt.Println("Found ", t_row[0], " as invalid target of shape ", shape)
-		// fmt.Println("nodesWithShape: ", nodesWithShape)
+
+		if undefinedNodes != nil {
+			for n_row := range undefinedNodes.IterRows() {
+				if n_row[0].RawValue() == t_row[0].RawValue() {
+					continue outer // undefined membership is not a violation
+				}
+			}
+		}
+
 		out.content = append(out.content, []rdf.Term{t_row[0]})
 	}
 
@@ -1277,7 +1160,7 @@ func (s *ShaclDocument) Validate(ep endpoint) (bool, map[string]Table[rdf.Term])
 // Validate checks for each of the node shapes of a SHACL document, whether their target nodes
 // occur in the decorated graph with the shapes they are supposed to. If not, it returns false
 // as well as list of tables for each node shape of the nodes that fail validation.
-func (s *ShaclDocument) ValidateLP(LPTables []Table[rdf.Term], ep endpoint) (bool, map[string]Table[rdf.Term]) {
+func (s *ShaclDocument) ValidateLP(ep endpoint) (bool, map[string]Table[rdf.Term]) {
 	out := make(map[string]Table[rdf.Term])
 	// var outExp map[string][]string = make(map[string][]string)
 	result := true
@@ -1286,7 +1169,7 @@ func (s *ShaclDocument) ValidateLP(LPTables []Table[rdf.Term], ep endpoint) (boo
 	for _, shape := range s.shapeNames {
 		if shape.IsActive() { // deactivated shapes do not factor the validation
 			iri := shape.GetIRI()
-			invalidTargets := s.InvalidTargetLP(iri, LPTables, ep)
+			invalidTargets := s.InvalidTargetLP(iri, ep)
 			if invalidTargets.Len() > 0 {
 				out[iri] = invalidTargets
 				// outExp[iri] = abbrAll(explanations)
@@ -1300,31 +1183,70 @@ func (s *ShaclDocument) ValidateLP(LPTables []Table[rdf.Term], ep endpoint) (boo
 	return result, out
 }
 
-// AdoptLPAnswers takes the computed answers from the logic program and replaces entries
-// in uncondTables with them. If it cannot match any table, it returns an error
+// AdoptLPAnswers takes the computed answers from the logic program and populates
+// uncondAnswers with per-shape unary tables. LPTables rows are [predicate, node] pairs.
 func (s *ShaclDocument) AdoptLPAnswers(LPTables []Table[rdf.Term]) error {
-	for i := range LPTables {
+	predRows := make(map[string][]rdf.Term)
+	for _, t := range LPTables {
+		for row := range t.IterRows() {
+			if len(row) < 2 {
+				continue
+			}
+			predRows[row[0].RawValue()] = append(predRows[row[0].RawValue()], row[1])
+		}
+	}
 
+	for predName, nodes := range predRows {
 		shapeFound := false
-		// find matching shape
 		for name, shape := range s.shapeNames {
-			if shape.GetLogName() == LPTables[i].GetHeader()[0] {
+			if shape.GetLogName() == predName {
 				shapeFound = true
-				LPTables[i].SetHeader([]string{shape.GetIRI()})
-				s.uncondAnswers[name] = LPTables[i]
+				var tmp TableSimple[rdf.Term]
+				tmp.header = []string{shape.GetIRI()}
+				for _, node := range nodes {
+					tmp.content = append(tmp.content, []rdf.Term{node})
+				}
+				s.uncondAnswers[name] = &tmp
 			}
 		}
-		if !shapeFound && !strings.HasSuffix(LPTables[i].GetHeader()[0], "INTERN") &&
-			!strings.HasPrefix(LPTables[i].GetHeader()[0], "XONE") &&
-			!strings.HasPrefix(LPTables[i].GetHeader()[0], "OrShape") &&
-			!strings.HasPrefix(LPTables[i].GetHeader()[0], "Qual") &&
-			!strings.HasPrefix(LPTables[i].GetHeader()[0], "AtLeast") &&
-			!strings.HasPrefix(LPTables[i].GetHeader()[0], "count") {
-			fmt.Println("LPTable in question ", LPTables[i])
+		if !shapeFound &&
+			!strings.HasSuffix(predName, "INTERN") &&
+			!strings.HasPrefix(predName, "XONE") &&
+			!strings.HasPrefix(predName, "OrShape") &&
+			!strings.HasPrefix(predName, "Qual") &&
+			!strings.HasPrefix(predName, "AtLeast") &&
+			!strings.HasPrefix(predName, "count") {
+			fmt.Println("unmatched LP predicate: ", predName)
 			return errors.New("could not match all lptables")
 		}
-
 	}
 
 	return nil
+}
+
+// AdoptLPUndefinedAnswers populates undefinedAnswers from the Undefined set of a DLV well-founded model.
+// Nodes whose shape membership is undefined are excluded from the "invalid target" list in InvalidTargetLP.
+func (s *ShaclDocument) AdoptLPUndefinedAnswers(LPTables []Table[rdf.Term]) {
+	predRows := make(map[string][]rdf.Term)
+	for _, t := range LPTables {
+		for row := range t.IterRows() {
+			if len(row) < 2 {
+				continue
+			}
+			predRows[row[0].RawValue()] = append(predRows[row[0].RawValue()], row[1])
+		}
+	}
+
+	for predName, nodes := range predRows {
+		for name, shape := range s.shapeNames {
+			if shape.GetLogName() == predName {
+				var tmp TableSimple[rdf.Term]
+				tmp.header = []string{shape.GetIRI()}
+				for _, node := range nodes {
+					tmp.content = append(tmp.content, []rdf.Term{node})
+				}
+				s.undefinedAnswers[name] = &tmp
+			}
+		}
+	}
 }

@@ -6,39 +6,53 @@ package main
 
 import (
 	"bufio"
-	"flag"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/fatih/color"
+	flags "github.com/jessevdk/go-flags"
 
 	rdf "github.com/cem-okulmus/rdf2go-1"
 )
 
 var theCount int64 // lord of all things counting
 
+// getCount increments and returns a global counter.
+// Used to generate unique identifiers throughout the validation process.
 func getCount() int64 {
 	theCount++
 	return theCount
 }
 
+// check is a helper function that panics if the given error is not nil.
 func check(e error) {
 	if e != nil {
+		var exitErr *exec.ExitError
+		if errors.As(e, &exitErr) {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			if stderr != "" {
+				panic(fmt.Sprintf("%v\nstderr:\n%s", e, stderr))
+			}
+		}
+
 		panic(e)
 	}
 }
 
-func res(s string) rdf.Term {
-	return rdf.NewResource(s)
-}
+// func res(s string) rdf.Term {
+// 	return rdf.NewResource(s)
+// }
 
 var prefixes map[string]string = make(map[string]string)
 
@@ -50,6 +64,9 @@ var (
 	_xsd  = "http://www.w3.org/2001/XMLSchema#"
 )
 
+// GetNameSpace parses namespace prefixes from a Turtle file and populates the global prefixes map.
+// It extracts @prefix declarations and stores the mapping between abbreviations and full URIs.
+// Standard RDF namespaces (sh, rdf, rdfs) are set by default.
 func GetNameSpace(file *os.File) {
 	// TODO: make this less crazy and ugly
 
@@ -63,6 +80,7 @@ func GetNameSpace(file *os.File) {
 	check(err)
 
 	scanner := bufio.NewScanner(file)
+	check(scanner.Err())
 	validID := regexp.MustCompile(`<.*?>`)
 
 	// iterate over each line in the file
@@ -91,22 +109,30 @@ func GetNameSpace(file *os.File) {
 
 var activeDoc *ShaclDocument
 
+// abbr abbreviates a string by replacing full namespace URIs with their registered prefixes.
+// It also replaces qualified names of shapes with their abbreviated forms when available.
 func abbr(in string) string {
-	for k, v := range prefixes {
 
-		in = strings.ReplaceAll(in, " <> ", "👨‍🍳️")
-		in = strings.ReplaceAll(in, " > ", "🐭️")
-		in = strings.ReplaceAll(in, " < ", "🧀️")
-		in = strings.ReplaceAll(in, ">=", "🤔️")
-		in = strings.ReplaceAll(in, "<=", "😀️")
-		// in = strings.ReplaceAll(in, "_:", "")
-		in = strings.ReplaceAll(in, ">", "")
-		in = strings.ReplaceAll(in, "<", "")
-		in = strings.ReplaceAll(in, "🤔️", ">=")
-		in = strings.ReplaceAll(in, "😀️", "<=")
-		in = strings.ReplaceAll(in, "🐭️", " > ")
-		in = strings.ReplaceAll(in, "🧀️", " < ")
-		in = strings.ReplaceAll(in, "👨‍🍳️", " <> ")
+	pairs1 := []string{
+		// Angle-bracket stripping: preserve operators by listing them first (longer wins).
+		" <> ", "\x01",
+		">=", "\x02",
+		"<=", "\x03",
+		" > ", "\x04",
+		" < ", "\x05",
+		">", "",
+		"<", "",
+	}
+	pairs2 := []string{
+		"\x01", " <> ",
+		"\x02", ">=",
+		"\x03", "<=",
+		"\x04", " > ",
+		"\x05", " < ",
+	}
+	in = strings.NewReplacer(pairs2...).Replace(strings.NewReplacer(pairs1...).Replace(in))
+
+	for k, v := range prefixes {
 		in = strings.ReplaceAll(in, v, k)
 	}
 
@@ -119,45 +145,6 @@ func abbr(in string) string {
 	return in
 }
 
-func removeAbbr(in string) string {
-	for _, v := range prefixes {
-		in = strings.ReplaceAll(in, v, "")
-	}
-	return in
-}
-
-func addAbbr() string {
-	var sb strings.Builder
-
-	for k, v := range prefixes {
-		sb.WriteString(fmt.Sprint("@prefix ", k, " <", v, "> .\n"))
-	}
-	sb.WriteString("\n")
-	return sb.String()
-}
-
-func abbrAll(in []string) []string {
-	var out []string
-
-	for i := range in {
-		out = append(out, abbr(in[i]))
-	}
-
-	return out
-}
-
-func removeAbbrAll(in []string) []string {
-	var out []string
-
-	for i := range in {
-		out = append(out, removeAbbr(in[i]))
-	}
-
-	return out
-}
-
-var ResA = res(_rdf + "type")
-
 type timeComposer struct {
 	times []labelTime
 }
@@ -166,12 +153,24 @@ func (t timeComposer) String() string {
 	var sb strings.Builder
 	const padding = 4
 	w := tabwriter.NewWriter(&sb, 0, 0, padding, ' ', tabwriter.TabIndent)
+	var total float64
 	for _, time := range t.times {
 		fmt.Fprint(w, time.String(), "\n")
+		total += time.time
 	}
+	fmt.Fprintf(w, "Total \t: %.5f ms\n", total)
 	err := w.Flush()
 	check(err)
-	return sb.String()
+	// Bold the Total line after flushing so tabwriter width calculations are unaffected.
+	it := color.New(color.Bold)
+	lines := strings.Split(sb.String(), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			lines[i] = it.Sprint(lines[i])
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 type labelTime struct {
@@ -183,66 +182,26 @@ func (l labelTime) String() string {
 	return fmt.Sprintf("%s \t: %.5f ms", l.label, l.time)
 }
 
-// Done:
-//  *  get a better understanding of SHACL documents
-//      - how to read complex property elements
-//      -
-//      -> Transform the weird ad-hoc constraints in resources into "proper" SHACL
-//  *  Use rdf2go to parse (full) SHACL documents
-//      - Initially only support NodeShapes
-//      - Supported Features
-//			* sh:property constraints
-//			  + sh:path
-//            + support for sh:inversePath
-//			  + sh:node (with shape or class as value)
-//            + sh:minCount, sh:maxCount
-//      - sh:and  & sh:not support
-//      - sh:targetClass & sh:targetObjectOf support
-// * support more of basic SHACL
-//   - sh:ignoredProperties (for sh:closed)
-//   - sh:closed
-//   - (if it comes in tests) explicit property shapes
-//   - sh:name
-//   - sh:datatype
-//   - sh:pattern (reg expressions sigh)
-//   - sh:nodeKind
-//   - sh:alternativePath
-//   - sh:zeroOrMorePath (plus all these related ones)
-//   - sh:in
-//   - sh:equals, disjoint, lessThan, lessThanOrEquals
-//   - sh:minLength, sh:maxLength, sh:languageIn, sh:uniqueLang
-//   - sh:minExclusive, sh:maxExclusive, sh:minInclusive, sh:maxInclusive//
-// * implement rewriting of conditional answers into logic programs
-// * implement integration with dlv:
-// 		- being able to send programs to dlv
-//		- being able to parse output from dlv back to unconditional answers
-// * Implement the restriction of Sparql queries to target nodes and indirect target nodes
-//    - incorporate the implicit target semantics
-//    - introduce indirect targets as a data structure
-//    - extraction of indirect targets from a Table
-// * Test out recursion, and compare behaviour with other solvers
-//   - recreate the (s <- s; s <- not not s) case in shacl and check the behaviour
-//   - find a list of validators out there supporting recursion
-// * Implement the restriction of Sparql queries to target nodes and indirect target nodes
-//    - support for recursion, and iterated indirect target passing
-// * support more of basic SHACL
-//   - sh:qualifiedValue (min + max)
-//   - sh:xone
-//   - sh:or
-//  * support of deactivating a shape (should be easy)
-// * Getting solver into shape for JELIA
-//   - test maxCount when empty value set (use !BOUND || )
-//  * Produce proper validation reports in RDF
-//   - support severity
-//   - result message
-//   - the various properties (value, source, path, focus, constraint)
-
 var QueryStore []string
 
-// the main validation function, extracted here to be used for easy testing
-func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool, debug,
-	omitVR bool, vrOutFile *os.File, silent bool, forceLP bool, onlyLP bool, onlyQueries bool,
-) *ValidationReport {
+// answerShacl performs SHACL validation on a parsed SHACL document against a SPARQL endpoint
+// using well-founded semantics. It handles both acyclic and recursive constraint patterns.
+// Parameters:
+//   - ep: SPARQL endpoint to query the data graph
+//   - parsedDoc: the parsed and initialized SHACL document containing shapes and constraints
+//   - config: configuration options for the validation process
+//
+// Returns a ValidationReport indicating whether the data conforms to the shape constraints.
+func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *ValidationReport {
+
+	debug := config.debug
+	omitVR := config.omitVR
+	vrOutFile := config.vrOutFile
+	silent := config.silent
+	forceLP := config.forceLP
+	onlyLP := config.onlyLP
+	onlyQueries := config.onlyQueries
+
 	// if onlyLP || onlyQueries {
 	// 	silent = true
 	// }
@@ -252,27 +211,13 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 		log.SetOutput(os.Stderr)
 	}
 
-	var c timeComposer
-	if !silent {
-		fmt.Println("Checking conditional answers ... ")
-	}
-
-	start := time.Now()
-	parsedDoc.AllCondAnswers(ep)
-	d := time.Since(start)
-	msec := d.Seconds() * float64(time.Second/time.Millisecond)
-	c.times = append(c.times, labelTime{time: msec, label: "Conditional Table computation"})
-	if !silent {
-		fmt.Println("All conditinal answers found.")
-	}
-
 	// for k, v := range parsedDoc.condAnswers {
 	// 	fmt.Println("TABLE: ", k)
 	// 	fmt.Println(v.Limit(5))
 	// }
 
 	if onlyQueries {
-		fmt.Println("The produced SPAQRL queries:  \n\n")
+		fmt.Println("The produced SPAQRL queries: ")
 
 		for _, query := range QueryStore {
 			fmt.Println(abbr(query))
@@ -282,19 +227,39 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 
 	}
 
+	var c timeComposer
+	start := time.Now()
+	var d time.Duration
+	var msec float64
 
+	renameMap = make(map[rdf.Term]string)
+	reverseMap = make(map[string]rdf.Term)
+
+	if !silent {
+		fmt.Println("Checking conditional answers ... ")
+	}
+
+	start = time.Now()
+	parsedDoc.AllCondAnswers(ep)
+	d = time.Since(start)
+	msec = d.Seconds() * float64(time.Second/time.Millisecond)
+	c.times = append(c.times, labelTime{time: msec, label: "Conditional Table computation"})
+	if !silent {
+		fmt.Println("All conditinal answers found.")
+	}
 
 	var res bool
 	var invalidTargets map[string]Table[rdf.Term]
-	var lp program
+	var lp serialisedProgram
 	var lpTables []Table[rdf.Term]
 
 	if parsedDoc.IsRecursive() || forceLP {
 		if !silent {
 			fmt.Println("Recursive document parsed, tranforming to LP and sending off to DLV.")
 		}
-		renameMap = make(map[string]string)
-		reverseMap = make(map[string]string)
+
+		var lpUndefinedTables []Table[rdf.Term]
+
 		start := time.Now()
 		lp = parsedDoc.GetAllLPs()
 		d := time.Since(start)
@@ -302,7 +267,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 		c.times = append(c.times, labelTime{time: msec, label: "Logic Program generation"})
 
 		if debug || onlyLP {
-			fmt.Println("The produced Logic Program:  \n\n")
+			fmt.Print("The produced Logic Program:  \n\n")
 			fmt.Println(abbr(lp.String()))
 			if onlyLP {
 				return nil
@@ -310,13 +275,15 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 		}
 
 		start = time.Now()
-		lpTables = lp.Answer(debug)
+		// fmt.Println("Unified LP: ", lp)
+		lpTables, lpUndefinedTables = lp.Answer(debug, false)
 		d = time.Since(start)
 		msec = d.Seconds() * float64(time.Second/time.Millisecond)
 		c.times = append(c.times, labelTime{time: msec, label: "DLV solving"})
 
 		err := parsedDoc.AdoptLPAnswers(lpTables)
 		check(err)
+		parsedDoc.AdoptLPUndefinedAnswers(lpUndefinedTables)
 
 		if debug {
 			fmt.Println("Answer from DLV: ")
@@ -326,7 +293,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 		}
 
 		start = time.Now()
-		res, invalidTargets = parsedDoc.ValidateLP(lpTables, ep)
+		res, invalidTargets = parsedDoc.ValidateLP(ep)
 		d = time.Since(start)
 		msec = d.Seconds() * float64(time.Second/time.Millisecond)
 		c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from DLV"})
@@ -365,7 +332,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 
 	// fmt.Println("ValidationResult in XML form: ")
 
-	var actual *ValidationReport
+	actual := &ValidationReport{conforms: res}
 	var reports []ValidationResult
 
 	allValid := true
@@ -450,80 +417,242 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, dataIncluded *bool
 		vrOutFile.WriteString(actual.String())
 	}
 
-	// Clean up the named graph afterwards
-	if *dataIncluded {
-		ep.ClearGraph(parsedDoc.fromGraph)
-	}
-
-	if !silent {
+	if config.timer {
 		fmt.Println("\n\nTime Composition:")
 		fmt.Println(c)
 	}
 	return actual
 }
 
+// used to collect the needed options for SHACL answer function, to avoid too many parameters
+type config struct {
+	debug       bool
+	omitVR      bool
+	vrOutFile   *os.File
+	silent      bool
+	forceLP     bool
+	onlyLP      bool
+	onlyQueries bool
+	timer       bool
+}
+
+// binaryExists reports whether the binary at path is reachable — stat for paths
+// containing a separator, LookPath for bare names.
+func binaryExists(path string) bool {
+	if strings.ContainsRune(path, '/') || strings.ContainsRune(path, os.PathSeparator) {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	_, err := exec.LookPath(path)
+	return err == nil
+}
+
+// findDepScript searches for the appropriate dependency-download script next to
+// the running executable, then in the current working directory.
+// On Windows it looks for download_deps.ps1; on all other platforms download_deps.sh.
+// Returns the script path and the interpreter command to run it with.
+func findDepScript() (script, interpreter string, err error) {
+	var name string
+	if runtime.GOOS == "windows" {
+		name = "download_deps.ps1"
+		interpreter = "powershell"
+	} else {
+		name = "download_deps.sh"
+		interpreter = "bash"
+	}
+
+	if exe, exeErr := os.Executable(); exeErr == nil {
+		candidate := filepath.Join(filepath.Dir(exe), name)
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			return candidate, interpreter, nil
+		}
+	}
+	if _, statErr := os.Stat(name); statErr == nil {
+		return name, interpreter, nil
+	}
+	return "", "", fmt.Errorf("%s not found next to executable or in working directory", name)
+}
+
+// ensureDependencies checks whether the required binaries are present and, if
+// any are missing, locates and runs the platform-appropriate download script.
+func ensureDependencies(needOxigraph bool) {
+	dlvMissing := !binaryExists(dlv)
+	oxiMissing := needOxigraph && func() bool {
+		_, err := findOxigraph()
+		return err != nil
+	}()
+
+	if !dlvMissing && !oxiMissing {
+		return
+	}
+
+	script, interpreter, err := findDepScript()
+	if err != nil {
+		return // let execution continue; the real error will surface later
+	}
+
+	interpPath, err := exec.LookPath(interpreter)
+	if err != nil {
+		// Try the alternative PowerShell executable name on Windows
+		if runtime.GOOS == "windows" {
+			interpPath, err = exec.LookPath("pwsh")
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Dependencies missing. Run %s manually to set them up.\n", script)
+			return
+		}
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// -ExecutionPolicy Bypass allows running unsigned local scripts
+		cmd = exec.Command(interpPath, "-ExecutionPolicy", "Bypass", "-File", script)
+	} else {
+		cmd = exec.Command(interpPath, script)
+	}
+
+	fmt.Println("Missing dependencies detected — running", script)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %s failed: %v\n", script, err)
+	}
+}
+
+// cliOptions holds all command-line flags parsed by go-flags.
+// Fields of type flags.Filename receive automatic shell completion for file paths.
+type cliOptions struct {
+	Endpoint          string         `short:"e" long:"endpoint"           description:"The URL to a SPARQL endpoint."`
+	EndpointUpdate    string         `short:"E" long:"endpointUpdate"     description:"The URL to a SPARQL endpoint used for updating the data."`
+	Local             bool           `short:"l" long:"local"              description:"Start a local in-memory Oxigraph SPARQL server. Requires --dataIncluded."`
+	ShaclDoc          flags.Filename `short:"s" long:"shaclDoc"           description:"The file path to a SHACL document."`
+	Dlv               flags.Filename `short:"d" long:"dlv"                description:"The location of the DLV binary used to evaluate recursive SHACL."`
+	DataIncluded      bool           `short:"i" long:"dataIncluded"       description:"Set this to true if the SHACL document also contains the data to be checked."`
+	ReuseData         bool           `            long:"reuseData"        description:"Use together with --dataIncluded and --endpoint when the target named graph was already populated separately (e.g. via a bulk import into GraphDB). Skips clearing the graph before inserting the SHACL doc's own triples and skips clearing it afterwards, so large pre-loaded datasets aren't re-parsed and re-inserted through this tool on every invocation."`
+	User              string         `short:"u" long:"user"               description:"The username needed to access endpoint."`
+	Password          string         `short:"p" long:"password"           description:"The password needed to access endpoint."`
+	Debug             bool           `short:"D" long:"debug"              description:"Activating debugging features."`
+	Silent            bool           `short:"S" long:"silent"             description:"Completely suppressing any stdio output."`
+	PoseTestQuery     flags.Filename `short:"q" long:"poseTestQuery"      description:"A query to run and return the results. Used for testing/debug purposes."`
+	OmitVR            bool           `short:"o" long:"omitVR"             description:"Omits outputting the Validation Report."`
+	OutputVR          flags.Filename `short:"O" long:"outputVR"           description:"A filepath used to export the Validation Report in turtle notation."`
+	ForceLP           bool           `short:"f" long:"forceLP"            description:"Force the translation into logic programs."`
+	RuleSet           flags.Filename `short:"r" long:"ruleSet"            description:"The file path to a set of SHACL rules."`
+	Stratified        bool           `short:"T" long:"stratified"         description:"Use stratified evaluation: each rule and shape must carry a [N]/sw:stratum annotation; strata are evaluated in order 1..N instead of iterating to fixpoint."`
+	DemoOutputLP      bool           `short:"L" long:"demoOutputLP"       description:"Outputs only the produced LPs."`
+	DemoOutputQueries bool           `short:"Q" long:"demoOutputQueries"  description:"Outputs only the produced SPARQL queries."`
+	Timer             bool           `            long:"timer"             description:"Print time composition after validation."`
+	Completion        string         `short:"c" long:"completion"         description:"Output a shell completion setup script and exit." choice:"bash" choice:"zsh" choice:"fish"`
+}
+
+// printCompletion outputs the one-liner shell setup that hooks shawell into the shell's
+// completion system. go-flags handles the actual completion at runtime via COMP_LINE/COMP_POINT.
+func printCompletion(shell string) {
+	self, err := os.Executable()
+	if err != nil {
+		self = "shawellRules"
+	}
+
+	switch shell {
+	case "bash":
+		fmt.Printf(`_%[1]s_completion() {
+    local args
+    args=("${COMP_WORDS[@]:1}")
+    COMPREPLY=( $(GO_FLAGS_COMPLETION=1 %[2]s "${args[@]}" 2>/dev/null) )
+    return 0
+}
+complete -F _%[1]s_completion shawell
+`, "shawell", self)
+	case "zsh":
+		fmt.Printf(`autoload -U +X bashcompinit && bashcompinit
+_%[1]s_completion() {
+    local args
+    args=("${COMP_WORDS[@]:1}")
+    COMPREPLY=( $(GO_FLAGS_COMPLETION=1 %[2]s "${args[@]}" 2>/dev/null) )
+    return 0
+}
+complete -F _%[1]s_completion shawell
+`, "shawell", self)
+	case "fish":
+		fmt.Printf(`function _shawell_complete
+    set -lx GO_FLAGS_COMPLETION 1
+    set args (commandline -opc)
+    set -e args[1]
+    %s $args 2>/dev/null
+end
+complete -c shawell -a '(_shawell_complete)' -f
+`, self)
+	}
+}
+
 func main() {
 	// ==============================================
 	// Command-Line Argument Parsing
 
-	flagSet := flag.NewFlagSet("shawell", flag.ExitOnError)
+	exitCode := 0
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintln(os.Stderr, r)
+			os.Exit(1)
+		}
+		os.Exit(exitCode)
+	}()
 
-	// input flags
-	endpointAddress := flagSet.String("endpoint", "", "The URL to a SPARQL endpoint.")
-	endpointUpdateAddress := flagSet.String("endpointUpdate", "",
-		"The URL to a SPARQL endpoint used for updating the data.")
-	shaclDocPath := flagSet.String("shaclDoc", "", "The file path to a SHACL document.")
-	dlvLoc := flagSet.String("dlv", "bin/dlv",
-		"The location of the DLV binary used to evaluate recursive SHACL.")
-	dataIncluded := flagSet.Bool("dataIncluded", false,
-		"Set this to true if the SHACL document also contains the data to be checked.")
-	username := flagSet.String("user", "", "The username needed to access endpoint.")
-	password := flagSet.String("password", "", "The password needed to access endpoint.")
-	debug := flagSet.Bool("debug", false, "Activacting debugging features.")
-	poseQuery := flagSet.String("poseTestQuery", "",
-		"A query to run and return the results. Used for testing/debug purposes.")
-	omitVR := flagSet.Bool("omitVR", false,
-		"Omits outputting the Validation Report. Note that it will still be produced internally.")
-	outputVR := flagSet.String("outputVR", "",
-		"A filepath used to export the Validation Report in turtle notation. "+
-			"Using this and -omitVR at same time is superflous.")
-	forceLP := flagSet.Bool("forceLP", false, "Force the translation into logic programs.")
-
-	// input flags demo purposes
-
-	demoOutputOnlyLP := flagSet.Bool("demoOutputLP", false, "Outputs only the produced LPs.")
-
-	demoOutputQueries := flagSet.Bool("demoOutputQueries", false, "Outputs only the produced SPARQL queries.")
-
-	usingUpdateEndpoint := false
-
-	flagSet.Parse(os.Args[1:])
-
-	if *endpointAddress == "" || *shaclDocPath == "" {
-		fmt.Println("Input args: " + strings.Join(os.Args, " "))
-		flagSet.Usage()
-		os.Exit(-1)
+	var opts cliOptions
+	opts.Dlv = flags.Filename("bin/dlv")
+	if runtime.GOOS == "windows" {
+		opts.Dlv = flags.Filename("bin/dlv.exe")
 	}
 
-	if *endpointUpdateAddress != "" {
-		usingUpdateEndpoint = true // using a system like GraphDB that expects different endpoints
+	parser := flags.NewParser(&opts, flags.Default)
+	if _, err := parser.Parse(); err != nil {
+		if e, ok := err.(*flags.Error); ok && e.Type == flags.ErrHelp {
+			return
+		}
+		exitCode = 2
+		return
 	}
+
+	if opts.Completion != "" {
+		printCompletion(opts.Completion)
+		return
+	}
+
+	// If only --shaclDoc is given with no endpoint or --local flag, assume --local --dataIncluded.
+	if opts.ShaclDoc != "" && opts.Endpoint == "" && !opts.Local {
+		opts.Local = true
+		opts.DataIncluded = true
+	}
+
+	if (opts.Endpoint == "" && !opts.Local) || opts.ShaclDoc == "" {
+		parser.WriteHelp(os.Stderr)
+		exitCode = 2
+		return
+	}
+
+	if opts.Local && !opts.DataIncluded {
+		fmt.Fprintln(os.Stderr, "Error: --local requires --dataIncluded (the data must be in the SHACL document)")
+		exitCode = 2
+		return
+	}
+
+	usingUpdateEndpoint := opts.EndpointUpdate != ""
 
 	// END Command-Line Argument Parsing
 	// ==============================================
 
 	// set DLV
-	dlv = *dlvLoc
+	dlv = string(opts.Dlv)
 
-	shaclDoc, err := os.Open(*shaclDocPath)
+	shaclDoc, err := os.Open(string(opts.ShaclDoc))
 	check(err)
 	defer shaclDoc.Close()
 
-	var vrOUtFile *os.File
-	if *outputVR != "" {
-		vrOUtFile, err = os.OpenFile(*outputVR, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	var vrOutFile *os.File
+	if opts.OutputVR != "" {
+		vrOutFile, err = os.OpenFile(string(opts.OutputVR), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		check(err)
-		defer vrOUtFile.Close()
+		defer vrOutFile.Close()
 	}
 
 	g2 := rdf.NewGraph(_sh)
@@ -533,21 +662,27 @@ func main() {
 
 	// fmt.Println("Parsed Graph: ", g2)
 
-
-
-	endpoint := GetSparqlEndpoint(
-		*endpointAddress,
-		*endpointUpdateAddress,
-		*username,
-		*password,
-		*debug,
-		usingUpdateEndpoint,
-		"",
-	)
+	var endpoint *SparqlEndpoint
+	if opts.Local {
+		var oxiCleanup func()
+		endpoint, oxiCleanup, err = StartOxigraph(opts.Debug)
+		check(err)
+		defer oxiCleanup()
+	} else {
+		endpoint = GetSparqlEndpoint(
+			opts.Endpoint,
+			opts.EndpointUpdate,
+			opts.User,
+			opts.Password,
+			opts.Debug,
+			usingUpdateEndpoint,
+			"",
+		)
+	}
 
 	// Test Query routine
-	if *poseQuery != "" {
-		queryFile, err := os.ReadFile(*poseQuery)
+	if opts.PoseTestQuery != "" {
+		queryFile, err := os.ReadFile(string(opts.PoseTestQuery))
 		check(err)
 
 		endpoint.QueryString(string(queryFile))
@@ -558,7 +693,8 @@ func main() {
 
 		fmt.Println("Argument: ", arg)
 
-		os.Exit(0)
+		exitCode = 0
+		return
 	}
 
 	GetNameSpace(shaclDoc)
@@ -568,41 +704,50 @@ func main() {
 	var graphName string
 
 	// check if data needs to be inserted into Endpoint
-	if *dataIncluded {
-		// VR, err = ExtractValidationReport(g2)
-		// check(err)
-
-		// fmt.Println("Extracted VR\n", VR)
-
-		basename := filepath.Base(*shaclDocPath)
+	if opts.DataIncluded {
+		basename := filepath.Base(string(opts.ShaclDoc))
 		fileName := strings.TrimSuffix(basename, filepath.Ext(basename))
-		res := endpoint.Insert(g2, "<"+_sh+fileName+">")
+		res := endpoint.Insert(g2, "<"+_sh+fileName+">", opts.ReuseData)
 		check(res)
 		graphName = "<" + _sh + fileName + ">"
 	}
 
+	parsedDoc := GetShaclDocument(g2, graphName, endpoint, opts.Debug)
 
-
-	parsedDoc := GetShaclDocument(g2, graphName, endpoint, *debug)
-
-	if *forceLP || *demoOutputOnlyLP {
+	if opts.ForceLP || opts.DemoOutputLP {
 		demoLP = true
 	}
 
-
-	parsedDoc.debug = *debug
+	parsedDoc.debug = opts.Debug
 	var addedText string
-	if !*debug {
+	if !opts.Debug {
 		it := color.New(color.Italic)
-		addedText = it.Sprint("(use -debug to also show blank Shapes)")
+		addedText = it.Sprint("(use --debug to also show blank Shapes)")
 	}
-	fmt.Println("The parsed SHACL Document:", addedText, parsedDoc.String())
+	if !opts.Silent {
+		fmt.Println("The parsed SHACL Document:", addedText, parsedDoc.String())
+	}
 
-
-
-	// set set active
+	// set active
 	activeDoc = &parsedDoc
 
+	// set up needed config for answerShacl
+	config := config{
+		debug:       opts.Debug,
+		omitVR:      opts.OmitVR,
+		vrOutFile:   vrOutFile,
+		silent:      opts.Silent,
+		forceLP:     opts.ForceLP,
+		onlyLP:      opts.DemoOutputLP,
+		onlyQueries: opts.DemoOutputQueries,
+		timer:       opts.Timer,
+	}
+
 	// Main Routine
-	answerShacl(endpoint, parsedDoc, dataIncluded, *debug, *omitVR, vrOUtFile, false, *forceLP, *demoOutputOnlyLP, *demoOutputQueries)
+	answerShacl(endpoint, parsedDoc, config)
+
+	// If needed, clean up the named graph afterwards
+	if opts.DataIncluded && !opts.ReuseData {
+		endpoint.ClearGraph(parsedDoc.fromGraph)
+	}
 }

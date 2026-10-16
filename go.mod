@@ -1,6 +1,6 @@
 module github.com/cem-okulmus/shawell
 
-go 1.20
+go 1.25
 
 require (
 	github.com/cem-okulmus/rdf2go-1 v0.1.6
@@ -11,10 +11,11 @@ require (
 
 require (
 	github.com/cem-okulmus/gon3-1 v0.2.3 // indirect
+	github.com/jessevdk/go-flags v1.6.1 // indirect
 	github.com/knakk/digest v0.0.0-20160404164910-fd45becddc49 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.17 // indirect
-	golang.org/x/sys v0.6.0 // indirect
+	golang.org/x/sys v0.21.0 // indirect
 )
 
 require (

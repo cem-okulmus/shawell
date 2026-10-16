@@ -148,6 +148,8 @@ func (t *TableSimple[T]) Merge(other Table[T]) error {
 	return nil
 }
 
+// GetTable converts a SPARQL query result into a TableSimple data structure.
+// Each column in the SPARQL result becomes a column in the table.
 func GetTable(r *sparql.Results) *TableSimple[rdf.Term] {
 	// for i := range r.Results.Bindings {
 	// 	for k, v := range r.Results.Bindings[i] {
@@ -214,8 +216,7 @@ func GetTable(r *sparql.Results) *TableSimple[rdf.Term] {
 
 // GroupedTable is a virtually grouped Table, that uses the same structure as simple tables,
 // (and offers all the same methods) but in addition also provides access to the grouped values
-// of a  value of the key attribute (fixed to be the first column)
-
+// of a value of the key attribute (fixed to be the first column)
 type GroupedTable[T stringer] struct {
 	header  []string
 	content [][]T
@@ -366,7 +367,7 @@ func (t *GroupedTable[T]) GetIndex(key T) (int, error) {
 	return val, nil
 }
 
-// Join 
+// Join
 func (t *GroupedTable[T]) AddIndex(key T, other *GroupedTable[T]) error {
 	if len(t.header) != len(other.header) {
 		return errors.New("incompatible tables to AddIndex")
@@ -455,13 +456,15 @@ func (t *GroupedTable[T]) Regroup() {
 	// remove duplicates
 	for k, v := range t.group {
 		for _, a := range attributesToGroup {
-			tmp := removeDuplicate[T](v[a])
+			tmp := removeDuplicate(v[a])
 			// fmt.Println("For key ", k, " at attribute ", a, " having group ", tmp)
 			t.group[k][a] = tmp
 		}
 	}
 }
 
+// GetGroupedTable converts a simple table into a grouped table where the first column becomes a grouping key.
+// This enables efficient lookup of all values associated with a particular subject.
 func GetGroupedTable[T stringer](inputToCheck Table[T]) *GroupedTable[T] {
 	// fmt.Println("Calling Group on Table", inputToCheck)
 	input, ok := inputToCheck.(*TableSimple[T])

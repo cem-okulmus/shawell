@@ -7,7 +7,7 @@ import (
 
 	"github.com/fatih/color"
 
-	"github.com/cem-okulmus/rdf2go-1"
+	rdf "github.com/cem-okulmus/rdf2go-1"
 )
 
 type Shape interface {
@@ -17,8 +17,8 @@ type Shape interface {
 	ToSparql(fromGraph string, target SparqlQueryFlat) SparqlQuery
 	GetIRI() string
 	GetDeps() []dependency
-	GetTargets() []TargetExpression
-	GetValidationTargets() []TargetExpression
+	GetTargets(bool) []TargetExpression
+	// GetValidationTargets() []TargetExpression
 	AddIndirectTargets([]TargetIndirect, *PropertyPath)
 	IsActive() bool
 	IsBlank() bool
@@ -26,6 +26,7 @@ type Shape interface {
 	GetLogName() string
 }
 
+// TransformToIndirect converts target expressions to indirect target expressions.
 func TransformToIndirect(input []TargetExpression) (out []TargetIndirect) {
 	for i := range input {
 		switch typ := input[i].(type) {
@@ -43,7 +44,7 @@ func TransformToIndirect(input []TargetExpression) (out []TargetIndirect) {
 type NodeShape struct {
 	id int64 // used for qualified Name
 	// NAME OF SHAPE
-	IRI rdf2go.Term // the IRI of the subject term defining the shape
+	IRI rdf.Term // the IRI of the subject term defining the shape
 	// TARGET EXPRESSION
 	target []TargetExpression // the target expression on which to test the shape
 	// DATA CONSTRAINTS
@@ -61,15 +62,16 @@ type NodeShape struct {
 	nodes           []ShapeRef            // restrict the property universally to a shape
 	qualifiedShapes []QSConstraint        // restrict the property existentially to a given number of nodes to be matched
 	// MINOR STUFF
-	severity    rdf2go.Term            // used in validation
-	message     map[string]rdf2go.Term // used in validation
-	deactivated bool                   // if true, then shape is ignored in validation
+	severity    rdf.Term            // used in validation
+	message     map[string]rdf.Term // used in validation
+	deactivated bool                // if true, then shape is ignored in validation
 	// DEPENDECY TO OTHER SHAPES
 	deps []dependency
 	// insideProp
 	insideProp *PropertyShape
 }
 
+// GetLogName returns the logical (internal) name of the node shape used in logic program generation.
 func (n *NodeShape) GetLogName() string {
 	// if demoLP && n.IRI != nil {
 	// 	return n.IRI.RawValue()
@@ -77,6 +79,7 @@ func (n *NodeShape) GetLogName() string {
 	return fmt.Sprint("Shape", n.id)
 }
 
+// GetQualName returns the qualified name of the node shape used for variable naming in SPARQL.
 func (n *NodeShape) GetQualName() string {
 	if n.insideProp != nil {
 		return n.insideProp.GetQualName()
@@ -84,6 +87,7 @@ func (n *NodeShape) GetQualName() string {
 	return fmt.Sprint("NodeShape", n.id)
 }
 
+// AddIndirectTargets adds indirect target expressions to the shape via a property path.
 func (n *NodeShape) AddIndirectTargets(indirect []TargetIndirect, viaPath *PropertyPath) {
 	for i := range indirect {
 		tmp := indirect[i]
@@ -94,8 +98,9 @@ func (n *NodeShape) AddIndirectTargets(indirect []TargetIndirect, viaPath *Prope
 	}
 }
 
+// GetConstraints returns all constraint instantiations for the node shape that need to be validated.
 func (n *NodeShape) GetConstraints(propertyName string, path PropertyPath, obj string, targetsFromParent *[]TargetExpression) (out []ConstraintInstantiation) {
-	var shapeName rdf2go.Term = n.IRI
+	var shapeName rdf.Term = n.IRI
 	// if propertyName != "" {
 	// 	shapeName = propertyName
 	// } else {
@@ -113,7 +118,7 @@ func (n *NodeShape) GetConstraints(propertyName string, path PropertyPath, obj s
 	if targetsFromParent != nil {
 		targets = *targetsFromParent // include the targets inherited from parent
 	} else {
-		targets = n.GetValidationTargets()
+		targets = n.GetTargets(false)
 	}
 
 	for i := range n.valuetypes {
@@ -191,6 +196,8 @@ func (n *NodeShape) GetConstraints(propertyName string, path PropertyPath, obj s
 	return out
 }
 
+// GetValidationReport computes validation results for a node shape by checking all its constraints.
+// Returns whether the shape is satisfied and a list of validation results for any violations.
 func (s ShaclDocument) GetValidationReport(n *NodeShape, ep endpoint) (result bool, reports []ValidationResult) {
 	constraints := n.GetConstraints("", nil, "?sub", nil)
 
@@ -200,7 +207,7 @@ func (s ShaclDocument) GetValidationReport(n *NodeShape, ep endpoint) (result bo
 
 	// fmt.Println("Started computing all ValidationTargets")
 
-	targets := n.GetValidationTargets()
+	targets := n.GetTargets(false)
 
 	// fmt.Println("Computed all ValidationTargets")
 
@@ -286,7 +293,7 @@ and:
 					pathName:                  nil,
 					value:                     targetNode,
 					sourceShape:               n.IRI,
-					sourceConstraintComponent: res(_sh + "AndConstraintComponent"),
+					sourceConstraintComponent: rdf.NewResource(_sh + "AndConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
@@ -326,7 +333,7 @@ or:
 					pathName:                  nil,
 					value:                     targetNode,
 					sourceShape:               n.IRI,
-					sourceConstraintComponent: res(_sh + "OrConstraintComponent"),
+					sourceConstraintComponent: rdf.NewResource(_sh + "OrConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
@@ -352,14 +359,14 @@ not:
 					pathName:                  nil,
 					value:                     targetNode,
 					sourceShape:               n.IRI,
-					sourceConstraintComponent: res(_sh + "NotConstraintComponent"),
+					sourceConstraintComponent: rdf.NewResource(_sh + "NotConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
 
 				result = false
 				reports = append(reports, report)
-				continue not // don't produce multile entries for the same term
+				continue not // don't produce multiple entries for the same term
 			}
 		}
 	}
@@ -392,7 +399,7 @@ xone:
 					pathName:                  nil,
 					value:                     targetNode,
 					sourceShape:               n.IRI,
-					sourceConstraintComponent: res(_sh + "XoneConstraintComponent"),
+					sourceConstraintComponent: rdf.NewResource(_sh + "XoneConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
@@ -419,7 +426,7 @@ node:
 					pathName:                  nil,
 					value:                     targetNode,
 					sourceShape:               n.IRI,
-					sourceConstraintComponent: res(_sh + "NodeConstraintComponent"),
+					sourceConstraintComponent: rdf.NewResource(_sh + "NodeConstraintComponent"),
 					severity:                  n.severity,
 					message:                   n.message,
 				}
@@ -434,51 +441,68 @@ node:
 	return result, reports
 }
 
-func (n *NodeShape) GetValidationTargets() []TargetExpression {
+// func (n *NodeShape) GetValidationTargets() []TargetExpression {
+// 	var targets []TargetExpression
+//
+// 	for i := range n.target {
+//		switch vt := n.target[i].(type) {
+//		case TargetIndirect:
+//			// skip
+//		default:
+//			targets = append(targets, vt)
+//		}
+//	}
+//	// targets = n.target
+//
+//	// handle implicit class targets
+//	if !n.IsBlank() {
+//		targets = append(targets, TargetClass{class: res(n.GetIRI())})
+//	}
+//
+//	return targets
+//}
+
+// GetTargets returns the explicit target expressions defined on the shape, including indirect targets.
+func (n *NodeShape) GetTargets(includeIndirect bool) []TargetExpression {
 	var targets []TargetExpression
 
-	for i := range n.target {
-		switch vt := n.target[i].(type) {
-		case TargetIndirect:
-			// skip
-		default:
-			targets = append(targets, vt)
+	if includeIndirect {
+		targets = n.target
+	} else {
+		for i := range n.target {
+			switch vt := n.target[i].(type) {
+			case TargetIndirect:
+				// skip
+			default:
+				targets = append(targets, vt)
+			}
 		}
 	}
-	// targets = n.target
 
 	// handle implicit class targets
 	if !n.IsBlank() {
-		targets = append(targets, TargetClass{class: res(n.GetIRI())})
+		targets = append(targets, TargetClass{class: rdf.NewResource(n.GetIRI())})
 	}
 
 	return targets
 }
 
-func (n *NodeShape) GetTargets() []TargetExpression {
-	var targets []TargetExpression
-
-	targets = n.target
-
-	// handle implicit class targets
-	if !n.IsBlank() {
-		targets = append(targets, TargetClass{class: res(n.GetIRI())})
-	}
-
-	return targets
-}
-
+// IsActive returns true if the shape has not been deactivated.
 func (n *NodeShape) IsActive() bool { return !n.deactivated }
 
+// IsBlank returns true if the shape is identified by a blank node.
 func (n *NodeShape) IsBlank() bool {
-	_, ok := n.IRI.(*rdf2go.BlankNode)
+	_, ok := n.IRI.(*rdf.BlankNode)
 	return ok
 }
 
+// GetDeps returns the list of dependencies this shape has on other shapes.
 func (n *NodeShape) GetDeps() []dependency { return n.deps }
 
+// GetIRI returns the IRI (identifier) of the node shape.
 func (n *NodeShape) GetIRI() string { return n.IRI.RawValue() }
 
+// IsShape marks this type as implementing the Shape interface.
 func (n *NodeShape) IsShape() {}
 
 func (n *NodeShape) String() string {
@@ -494,7 +518,7 @@ func (n *NodeShape) StringTab(a int, insideProperty bool, debug bool) string {
 
 	if !insideProperty {
 		switch n.IRI.(type) {
-		case *rdf2go.BlankNode:
+		case *rdf.BlankNode:
 			if a == 0 {
 				sb.WriteString(bold.Sprint(n.IRI))
 				sb.WriteString("(blank)")
@@ -615,7 +639,7 @@ func (n *NodeShape) StringTab(a int, insideProperty bool, debug bool) string {
 	return sb.String()
 }
 
-// PropertyShape expresses contstraints on properties that go out
+// PropertyShape expresses constraints on properties that go out
 // from the target node.
 // Note that path can be inverted, encode alternative paths, transitive closure,
 // and concatenation of multiple paths, as defined in standard
@@ -629,14 +653,17 @@ type PropertyShape struct {
 	universalOnly bool         // whether the PropertyShape carries only universal constraints
 }
 
+// Nested returns true if this property shape is nested inside another shape.
 func (p *PropertyShape) Nested() bool {
 	return len(p.shape.properties) != 0
 }
 
+// GetLogName returns the logical (internal) name of the property shape.
 func (p *PropertyShape) GetLogName() string {
 	return fmt.Sprint("Shape", p.id)
 }
 
+// GetQualName returns the qualified name of the property shape for SPARQL variable naming.
 func (p *PropertyShape) GetQualName() string {
 	// if demoLP {
 	// 	return p.shape.IRI.RawValue()
@@ -644,10 +671,12 @@ func (p *PropertyShape) GetQualName() string {
 	return fmt.Sprint("Property", p.id)
 }
 
+// AddIndirectTargets adds indirect target expressions to the shape via a property path.
 func (p *PropertyShape) AddIndirectTargets(indirect []TargetIndirect, viaPath *PropertyPath) {
 	p.shape.AddIndirectTargets(indirect, viaPath)
 }
 
+// GetConstraints returns all constraint instantiations for the property shape.
 func (p *PropertyShape) GetConstraints(num int, targetsFromParent *[]TargetExpression) (out []ConstraintInstantiation) {
 	uniqObj := fmt.Sprint("?InnerObj", num)
 
@@ -659,6 +688,7 @@ func (p *PropertyShape) GetConstraints(num int, targetsFromParent *[]TargetExpre
 
 // var someCount int = 1
 
+// GetVRProperty computes validation results for a property shape by checking all its property constraints.
 func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromParent *[]TargetExpression, parent string) (result bool, reports []ValidationResult) {
 	constraints := p.GetConstraints(0, targetsFromParent)
 
@@ -666,7 +696,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 	if targetsFromParent != nil {
 		targets = *targetsFromParent
 	} else {
-		targets = p.GetValidationTargets()
+		targets = p.GetTargets(false)
 	}
 	// fmt.Println("Started computing all ValidationTargets")
 
@@ -790,7 +820,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 	targetQueries := TargetsToQueries(targets)
 	neededTableBeforeCheck := GetTableForLogicalConstraints(ep, p.path, p.GetQualName(), targetQueries)
 
-	neededTable, ok := neededTableBeforeCheck.(*GroupedTable[rdf2go.Term])
+	neededTable, ok := neededTableBeforeCheck.(*GroupedTable[rdf.Term])
 	if !ok {
 		log.Panicln("Received non-grouped table from GetTableForLogicalConstraints")
 	}
@@ -821,7 +851,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 						pathName:                  p.path,
 						value:                     v,
 						sourceShape:               p.shape.IRI,
-						sourceConstraintComponent: res(_sh + "AndConstraintComponent"),
+						sourceConstraintComponent: rdf.NewResource(_sh + "AndConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
@@ -869,7 +899,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 						pathName:                  p.path,
 						value:                     v,
 						sourceShape:               p.shape.IRI,
-						sourceConstraintComponent: res(_sh + "OrConstraintComponent"),
+						sourceConstraintComponent: rdf.NewResource(_sh + "OrConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
@@ -896,7 +926,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 						pathName:                  p.path,
 						value:                     v,
 						sourceShape:               p.shape.IRI,
-						sourceConstraintComponent: res(_sh + "NotConstraintComponent"),
+						sourceConstraintComponent: rdf.NewResource(_sh + "NotConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
@@ -931,13 +961,13 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 					}
 				}
 
-				if numSatisfied > 1 {
+				if numSatisfied != 1 {
 					report := ValidationResult{
 						focusNode:                 target,
 						pathName:                  p.path,
 						value:                     v,
 						sourceShape:               p.shape.IRI,
-						sourceConstraintComponent: res(_sh + "XoneConstraintComponent"),
+						sourceConstraintComponent: rdf.NewResource(_sh + "XoneConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
@@ -965,7 +995,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 						pathName:                  p.path,
 						value:                     v,
 						sourceShape:               p.shape.IRI,
-						sourceConstraintComponent: res(_sh + "NodeConstraintComponent"),
+						sourceConstraintComponent: rdf.NewResource(_sh + "NodeConstraintComponent"),
 						severity:                  p.shape.severity,
 						message:                   p.shape.message,
 					}
@@ -1028,7 +1058,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 					focusNode:                 target,
 					pathName:                  p.path,
 					sourceShape:               p.shape.IRI,
-					sourceConstraintComponent: res(_sh + "QualifiedMaxCountConstraintComponent"),
+					sourceConstraintComponent: rdf.NewResource(_sh + "QualifiedMaxCountConstraintComponent"),
 					severity:                  p.shape.severity,
 					message:                   p.shape.message,
 				}
@@ -1043,7 +1073,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 					focusNode:                 target,
 					pathName:                  p.path,
 					sourceShape:               p.shape.IRI,
-					sourceConstraintComponent: res(_sh + "QualifiedMinCountConstraintComponent"),
+					sourceConstraintComponent: rdf.NewResource(_sh + "QualifiedMinCountConstraintComponent"),
 					severity:                  p.shape.severity,
 					message:                   p.shape.message,
 				}
@@ -1057,10 +1087,8 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 	return result, reports
 }
 
-func (p *PropertyShape) GetTargets() []TargetExpression { return p.shape.GetTargets() }
-
-func (p *PropertyShape) GetValidationTargets() []TargetExpression {
-	return p.shape.GetValidationTargets()
+func (p *PropertyShape) GetTargets(includeIndirect bool) []TargetExpression {
+	return p.shape.GetTargets(includeIndirect)
 }
 
 func (p *PropertyShape) IsActive() bool { return p.shape.IsActive() }

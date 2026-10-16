@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,6 +34,7 @@ type EARLTestResult struct {
 	validator rdf.Term
 }
 
+// String renders an EARLReport in Turtle format conforming to the EARL ontology.
 func (e *EARLReport) String() string {
 	var sb strings.Builder
 
@@ -56,6 +56,7 @@ func (e *EARLReport) String() string {
 	return sb.String()
 }
 
+// AddTestResult appends a new test result to the EARL report.
 func (e *EARLReport) AddTestResult(name, info string, result Result) {
 	e.testResult = append(e.testResult, EARLTestResult{
 		name:      name,
@@ -66,7 +67,7 @@ func (e *EARLReport) AddTestResult(name, info string, result Result) {
 	})
 }
 
-// ADD EARL INFO to indicate the currently used SPAQRL engine
+// String renders an individual test result assertion in EARL Turtle format.
 func (t EARLTestResult) String() string {
 	var sb strings.Builder
 
@@ -98,6 +99,7 @@ func (t EARLTestResult) String() string {
 }
 
 func CoreTests() (tests []string) {
+
 	// Complex:
 	tests = append(tests, "/complex/personexample")
 	tests = append(tests, "/complex/shacl-shacl")
@@ -121,6 +123,7 @@ func CoreTests() (tests []string) {
 	tests = append(tests, "/node/datatype-002")
 	tests = append(tests, "/node/disjoint-001")
 	tests = append(tests, "/node/equals-001")
+	tests = append(tests, "/node/equals-path-001")
 	tests = append(tests, "/node/hasValue-001")
 	tests = append(tests, "/node/in-001")
 	tests = append(tests, "/node/languageIn-001")
@@ -167,6 +170,7 @@ func CoreTests() (tests []string) {
 	tests = append(tests, "/property/datatype-ill-formed")
 	tests = append(tests, "/property/disjoint-001")
 	tests = append(tests, "/property/equals-001")
+	tests = append(tests, "/property/equals-path-001")
 	tests = append(tests, "/property/hasValue-001")
 	tests = append(tests, "/property/in-001")
 	tests = append(tests, "/property/languageIn-001")
@@ -218,151 +222,31 @@ func CoreTests() (tests []string) {
 // in case of no compliance. Partial Compliance is reported, but not treated
 // as an error for the purposes of this test. An EARL report is also output.
 func TestCompliance(t *testing.T) {
-	Compliance(t)
-}
-
-func Compliance(t *testing.T) EARLReport {
-	var tests []string = CoreTests()
-
-	dlv = "bin/dlv"
-
-	endpoint := GetSparqlEndpoint(
-		"http://localhost:7200/repositories/graphdb",
-		"http://localhost:7200/repositories/graphdb/statements",
-		"",
-		"",
-		false,
-		true,
-		"",
-	)
-
-	countPassed := 0
-	countPartial := 0
-
-	var basedir string = "resources/W3_SHACL_Test_Suite_Core"
-
-	earl := EARLReport{
-		validatorName:       res("https://github.com/cem-okulmus/shawell"),
-		validatorNameString: "shaWell",
-		developer:           res("https://github.com/cem-okulmus"),
-	}
-
-	earlInfo := "Sparql engine being used: GraphDB 10.3.3"
-
-	for _, testStringCompact := range tests {
-
-		testString := basedir + testStringCompact + ".ttl"
-
-		fmt.Print("Testing: ", testString, " ... ")
-
-		shaclDoc, err := os.Open(testString)
-		check(err)
-		defer shaclDoc.Close()
-
-		g2 := rdf.NewGraph(_sh)
-
-		err = g2.Parse(shaclDoc, "text/turtle")
-		check(err)
-
-		prefixes = make(map[string]string) // reset
-		GetNameSpace(shaclDoc)
-
-		var VR *ValidationReport
-
-		var graphName string
-
-		VR, err = ExtractValidationReport(g2)
-		check(err)
-
-		// fmt.Println("Extracted VR\n", VR)
-
-		basename := filepath.Base(testString)
-		fileName := strings.TrimSuffix(basename, filepath.Ext(basename))
-		res := endpoint.Insert(g2, "<"+_sh+fileName+">")
-		check(res)
-		graphName = "<" + _sh + fileName + ">"
-		parsedDoc := GetShaclDocument(g2, graphName, endpoint, false)
-		parsedDoc.debug = false
-		activeDoc = &parsedDoc
-
-		var isomorph bool
-		dataincluded := true
-		actual := answerShacl(endpoint, parsedDoc,
-			&dataincluded, false, false, nil, true, false)
-
-		result := actual.conforms == VR.conforms
-
-		jena_path := "bin/apache-jena-4.10.0/bin/rdfcompare"
-
-		// Open the files for writing
-		actualFile, err := os.Create("/tmp/actual.ttl")
-		check(err)
-		defer actualFile.Close()
-		_, err = actualFile.WriteString(actual.String())
-		check(err)
-
-		expectedFile, err := os.Create("/tmp/expected.ttl")
-		check(err)
-		defer expectedFile.Close()
-		VR.dataGraph = nil
-		VR.shapesGraph = nil
-		VR.testName = nil
-		VR.label = nil
-		_, err = expectedFile.WriteString(VR.String())
-		check(err)
-
-		// check isomorphism
-
-		cmd := exec.Command("/bin/sh", jena_path, "/tmp/actual.ttl", "/tmp/expected.ttl")
-
-		out, _ := cmd.Output()
-		outString := string(out)
-
-		isomorph = strings.HasPrefix(outString, "models are equal")
-
-		green := color.New(color.FgGreen)
-		yellow := color.New(color.FgYellow)
-		red := color.New(color.FgRed)
-
-		if !result {
-			t.Error(red.Sprint("For test: ", testString, " did not pass."))
-		}
-		var addText string
-
-		if !result {
-			addText = red.Sprint("Failed")
-			earl.AddTestResult("/core"+testStringCompact, earlInfo, failed)
-		} else if isomorph {
-			addText = green.Sprint("Full")
-			countPassed++
-			earl.AddTestResult("/core"+testStringCompact, earlInfo, passed)
-		} else if result && !isomorph {
-			addText = yellow.Sprint("Partial")
-			countPartial++
-			earl.AddTestResult("/core"+testStringCompact, earlInfo, partial)
-		}
-		fmt.Print("passed; Compliance: ", addText, "\n")
-	}
-
-	fmt.Println("\n\n Partial Tests: ", countPartial, " Passed Tests: ", countPassed)
-
-	fmt.Println("EARL report: \n\n ", earl.String())
-
-	return earl
+	Compliance(t, false)
 }
 
 // TestLogicProgram tests whether the translation to logic programs is compliant
 // with SHACL core, producing an EARL report of the test findings
 func TestLogicProgram(t *testing.T) {
-	LogicProgram(t)
+	Compliance(t, true)
 }
 
-func LogicProgram(t *testing.T) EARLReport {
-	var tests []string = CoreTests()
+// TestComplianceOxigraph runs the SHACL Test Suite Core using a local Oxigraph instance.
+func TestComplianceOxigraph(t *testing.T) {
+	ComplianceOxigraph(t, false)
+}
+
+// TestLogicProgramOxigraph tests the LP translation for compliance using a local Oxigraph instance.
+func TestLogicProgramOxigraph(t *testing.T) {
+	ComplianceOxigraph(t, true)
+}
+
+func Compliance(t *testing.T, forceLP bool) EARLReport {
+	ensureDependencies(false)
 
 	dlv = "bin/dlv"
 
-	endpoint := GetSparqlEndpoint(
+	ep := GetSparqlEndpoint(
 		"http://localhost:7200/repositories/graphdb",
 		"http://localhost:7200/repositories/graphdb/statements",
 		"",
@@ -372,18 +256,42 @@ func LogicProgram(t *testing.T) EARLReport {
 		"",
 	)
 
+	if err := ep.Ping(); err != nil {
+		t.Skip("GraphDB not available:", err)
+		return EARLReport{}
+	}
+
+	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: GraphDB 10.3.3")
+}
+
+func ComplianceOxigraph(t *testing.T, forceLP bool) EARLReport {
+	ensureDependencies(true)
+
+	dlv = "bin/dlv"
+
+	ep, cleanup, err := StartOxigraph(false)
+	if err != nil {
+		t.Skip("oxigraph not available:", err)
+		return EARLReport{}
+	}
+	defer cleanup()
+
+	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: Oxigraph")
+}
+
+func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEndpoint, earlInfo string) EARLReport {
+	var tests []string = CoreTests()
+
 	countPassed := 0
 	countPartial := 0
 
 	var basedir string = "resources/W3_SHACL_Test_Suite_Core"
 
 	earl := EARLReport{
-		validatorName:       res("https://github.com/cem-okulmus/shawell"),
+		validatorName:       rdf.NewResource("https://github.com/cem-okulmus/shawell"),
 		validatorNameString: "shaWell",
-		developer:           res("https://github.com/cem-okulmus"),
+		developer:           rdf.NewResource("https://github.com/cem-okulmus"),
 	}
-
-	earlInfo := "Sparql engine being used: GraphDB 10.3.3"
 
 	for _, testStringCompact := range tests {
 
@@ -413,49 +321,43 @@ func LogicProgram(t *testing.T) EARLReport {
 
 		basename := filepath.Base(testString)
 		fileName := strings.TrimSuffix(basename, filepath.Ext(basename))
-		res := endpoint.Insert(g2, "<"+_sh+fileName+">")
+
+		//ClearData
+
+		err = ep.ClearGraph("<" + _sh + fileName + ">")
+		check(err)
+
+		res := ep.Insert(g2, "<"+_sh+fileName+">", false)
 		check(res)
 		graphName = "<" + _sh + fileName + ">"
-		parsedDoc := GetShaclDocument(g2, graphName, endpoint, false)
+		parsedDoc := GetShaclDocument(g2, graphName, ep, false)
 		parsedDoc.debug = false
 		activeDoc = &parsedDoc
 
-		dataincluded := true
-		actual := answerShacl(endpoint, parsedDoc,
-			&dataincluded, false, false, nil, true, true)
+		config := config{
+			debug:       false,
+			omitVR:      false,
+			vrOutFile:   nil,
+			silent:      true,
+			forceLP:     forceLP,
+			onlyLP:      false,
+			onlyQueries: false,
+		}
+
+		actual := answerShacl(ep, parsedDoc, config)
+
+		//ClearData
+
+		err = ep.ClearGraph("<" + _sh + fileName + ">")
+		check(err)
 
 		result := actual.conforms == VR.conforms
 
-		jena_path := "bin/apache-jena-4.10.0/bin/rdfcompare"
-
-		// Open the files for writing
-		actualFile, err := os.Create("/tmp/actual.ttl")
-		check(err)
-		defer actualFile.Close()
-		_, err = actualFile.WriteString(actual.String())
-		check(err)
-
-		expectedFile, err := os.Create("/tmp/expected.ttl")
-		check(err)
-		defer expectedFile.Close()
-		defer expectedFile.Close()
 		VR.dataGraph = nil
 		VR.shapesGraph = nil
 		VR.testName = nil
 		VR.label = nil
-		_, err = expectedFile.WriteString(VR.String())
-		check(err)
-
-		// check isomorphism
-
-		cmd := exec.Command("/bin/sh", jena_path, "/tmp/actual.ttl", "/tmp/expected.ttl")
-
-		out, _ := cmd.Output()
-		// check(err)
-
-		outString := string(out)
-
-		isomorph = strings.HasPrefix(outString, "models are equal")
+		isomorph = rdfTurtleIsomorphic(actual.String(), VR.String())
 
 		green := color.New(color.FgGreen)
 		yellow := color.New(color.FgYellow)
@@ -483,7 +385,9 @@ func LogicProgram(t *testing.T) EARLReport {
 
 	fmt.Println("\n\n Partial Tests: ", countPartial, " Passed Tests: ", countPassed)
 
-	fmt.Println("EARL report: \n\n ", earl.String())
+	if earlOutput {
+		fmt.Println("EARL report: \n\n ", earl.String())
+	}
 
 	return earl
 }
@@ -491,9 +395,9 @@ func LogicProgram(t *testing.T) EARLReport {
 func TestLPMatchesUnwinding(t *testing.T) {
 	// get earl from unwinding:
 
-	earlUnwind := Compliance(t)
+	earlUnwind := Compliance(t, false)
 
-	earlLP := LogicProgram(t)
+	earlLP := Compliance(t, true)
 
 	green := color.New(color.FgGreen)
 	red := color.New(color.FgRed)
@@ -503,4 +407,19 @@ func TestLPMatchesUnwinding(t *testing.T) {
 	}
 
 	green.Println("Logic Program and Unwinding produce _exactly_ same result.")
+}
+
+func TestLPMatchesUnwindingOxigraph(t *testing.T) {
+	earlUnwind := ComplianceOxigraph(t, false)
+
+	earlLP := ComplianceOxigraph(t, true)
+
+	green := color.New(color.FgGreen)
+	red := color.New(color.FgRed)
+
+	if earlLP.String() != earlUnwind.String() {
+		t.Error(red.Sprint(" Logic Program Translation and Unwinding do not produce same EARL (Oxigraph)."))
+	}
+
+	green.Println("Logic Program and Unwinding produce _exactly_ same result (Oxigraph).")
 }

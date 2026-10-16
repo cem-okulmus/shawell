@@ -3,51 +3,46 @@ package main
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
 	rdf "github.com/cem-okulmus/rdf2go-1"
 
-	"golang.org/x/exp/constraints"
-
+	"github.com/knakk/digest"
 	"github.com/knakk/sparql"
 )
-
-// Sorted has complexity: O(n * log(n)), a needs to be sorted
-func SortedGeneric[T constraints.Ordered](a []T, b []T) []T {
-	set := make([]T, 0)
-
-	for _, v := range a {
-		idx := sort.Search(len(b), func(i int) bool {
-			return b[i] >= v
-		})
-		if idx < len(b) && b[idx] == v {
-			set = append(set, v)
-		}
-	}
-
-	return set
-}
 
 type endpoint interface {
 	Answer(ns Shape, target []SparqlQueryFlat) Table[rdf.Term]
 	Query(s SparqlQuery) Table[rdf.Term]
 	QueryFlat(s SparqlQueryFlat) Table[rdf.Term]
 	QueryString(s string) Table[rdf.Term]
-	Insert(input *rdf.Graph, fromGraph string) error
+	Insert(input *rdf.Graph, fromGraph string, additive bool) error
+	Delete(input *rdf.Graph, fromGraph string) error
 	ClearGraph(fromGraph string) error
 	GetGraph() string
 }
 
 type SparqlEndpoint struct {
 	repo           *sparql.Repo
-	repoUpdate     *sparql.Repo
 	fromGraph      string
 	debug          bool
 	updateEndpoint bool
+	updateAddr     string
+	updateClient   *http.Client
 }
 
+// GetSparqlEndpoint creates and returns a new SparqlEndpoint connected to a SPARQL repository.
+// Parameters:
+//   - address: the URL of the SPARQL query endpoint
+//   - updateAddr: the URL of the SPARQL update endpoint (only used if update is true)
+//   - username: optional username for digest authentication
+//   - password: optional password for digest authentication
+//   - debug: enables debug output
+//   - update: if true, enables write operations via UpdateEndpoint
+//   - graph: the named graph URI to use for all queries
 func GetSparqlEndpoint(address, updateAddr, username, password string, debug, update bool, graph string) *SparqlEndpoint {
 	repo, err := sparql.NewRepo(address,
 		sparql.DigestAuth(username, password),
@@ -55,27 +50,36 @@ func GetSparqlEndpoint(address, updateAddr, username, password string, debug, up
 	)
 	check(err)
 
-	var repoUpdate *sparql.Repo
+	var updateClient *http.Client
 
 	if update {
-		repoUpdate, err = sparql.NewRepo(updateAddr,
-			sparql.DigestAuth(username, password),
-			sparql.Timeout(time.Second*600),
-		)
-		check(err)
+		updateClient = &http.Client{
+			Transport: digest.NewTransport(username, password),
+			Timeout:   time.Second * 600,
+		}
 	}
 
 	return &SparqlEndpoint{
 		repo:           repo,
-		repoUpdate:     repoUpdate,
 		debug:          debug,
 		updateEndpoint: update,
 		fromGraph:      graph,
+		updateAddr:     updateAddr,
+		updateClient:   updateClient,
 	}
 }
 
+// GetGraph returns the named graph URI currently associated with this endpoint.
 func (s *SparqlEndpoint) GetGraph() string { return s.fromGraph }
 
+// Ping checks whether the SPARQL endpoint is reachable by issuing a minimal ASK query.
+func (s *SparqlEndpoint) Ping() error {
+	_, err := s.repo.Query("ASK { }")
+	return err
+}
+
+// ClearGraph clears all triples from the specified named graph on the SPARQL endpoint.
+// If fromGraph is empty, returns an error.
 func (s *SparqlEndpoint) ClearGraph(fromGraph string) (out error) {
 	if fromGraph == "" {
 		out = errors.New("need to provide a graph for the Clear command")
@@ -83,30 +87,69 @@ func (s *SparqlEndpoint) ClearGraph(fromGraph string) (out error) {
 	}
 
 	if s.updateEndpoint {
-		out = s.repoUpdate.Update(fmt.Sprint("CLEAR GRAPH ", fromGraph))
+		out = s.doUpdate(fmt.Sprintf("DROP SILENT GRAPH %s", fromGraph))
 	} else {
-		_, out = s.repo.Query(fmt.Sprint("CLEAR GRAPH ", fromGraph))
+		_, out = s.repo.Query(fmt.Sprintf("DROP SILENT GRAPH %s", fromGraph))
 	}
 
 	return out
 }
 
-// Insert takes as input an RDF graph, and inserts it into the Sparql Endpoint
-func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string) (out error) {
-	// extract graph name (this assumes we only use this for W3C test suites w/ fixed format)
+// doUpdate sends a SPARQL 1.1 Update request with Content-Type:
+// application/sparql-update and the update text as a raw request body,
+// rather than going through sparql.Repo.Update's
+// application/x-www-form-urlencoded encoding.
+//
+// RDF4J-based servers (confirmed against GraphDB 10.x) parse
+// x-www-form-urlencoded bodies through their servlet container's form
+// parameter parser, which caps the parseable body size (Tomcat's default
+// maxPostSize is 2MB). Past that size the "update" parameter silently fails
+// to parse and the server responds with a misleading "Unsupported MIME
+// type: application/x-www-form-urlencoded" 415, even though the content
+// type itself is fine. The raw-body application/sparql-update form is read
+// as a plain input stream and isn't subject to that limit.
+func (s *SparqlEndpoint) doUpdate(updateString string) error {
+	req, err := http.NewRequest("POST", s.updateAddr, strings.NewReader(updateString))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/sparql-update")
 
+	resp, err := s.updateClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, readErr := io.ReadAll(resp.Body)
+		msg := ""
+		if readErr == nil {
+			msg = strings.TrimSpace(string(body))
+		}
+		if msg != "" {
+			return fmt.Errorf("update: SPARQL request failed: %s. Response body: \n%s", resp.Status, msg)
+		}
+		return fmt.Errorf("update: SPARQL request failed: %s", resp.Status)
+	}
+
+	return nil
+}
+
+// Insert loads an RDF graph into the SPARQL endpoint under the specified named graph.
+// If fromGraph is empty the endpoint's current graph is used.
+// When additive is false the target graph is cleared first; when true existing
+// triples are preserved and the new ones are simply appended.
+func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string, additive bool) (out error) {
 	if fromGraph != "" {
 		s.fromGraph = fromGraph
 	}
 
-	// clear graph first
-
-	// fmt.Println("Attempting clear: ", s.fromGraph)
-	err := s.ClearGraph(s.fromGraph)
-	if err != nil {
-		return err
+	if !additive {
+		if err := s.ClearGraph(s.fromGraph); err != nil {
+			return err
+		}
 	}
-	// fmt.Println("Passed Clear")
 
 	var sb strings.Builder
 
@@ -115,7 +158,6 @@ func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string) (out error) 
 	}
 
 	sb.WriteString("INSERT  DATA { \n")
-
 	sb.WriteString(fmt.Sprint("GRAPH ", s.fromGraph, " { \n"))
 
 	for triple := range input.IterTriples() {
@@ -126,28 +168,61 @@ func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string) (out error) 
 
 	insertString := sb.String()
 
-	// fmt.Println(de)
 	if s.debug {
 		fmt.Println("INSERT String \n ", insertString)
 	}
 
+	var err error
 	if s.updateEndpoint {
-		err = s.repoUpdate.Update(insertString)
+		err = s.doUpdate(insertString)
 	} else {
 		_, err = s.repo.Query(insertString)
 	}
 
-	if err != nil {
-		out = err
+	return err
+}
+
+// Delete removes the triples in input from the specified named graph on the SPARQL endpoint.
+// If fromGraph is empty the endpoint's current graph is used.
+func (s *SparqlEndpoint) Delete(input *rdf.Graph, fromGraph string) (out error) {
+	if fromGraph != "" {
+		s.fromGraph = fromGraph
+	}
+
+	var sb strings.Builder
+
+	for k, v := range prefixes {
+		sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+	}
+
+	sb.WriteString("DELETE DATA { \n")
+	sb.WriteString(fmt.Sprint("GRAPH ", s.fromGraph, " { \n"))
+
+	for triple := range input.IterTriples() {
+		sb.WriteString(fmt.Sprint(triple.Subject, " ", triple.Predicate, " ", triple.Object, ". \n"))
+	}
+
+	sb.WriteString("} \n }")
+
+	deleteString := sb.String()
+
+	if s.debug {
+		fmt.Println("DELETE String \n ", deleteString)
+	}
+
+	if s.updateEndpoint {
+		out = s.doUpdate(deleteString)
 	} else {
-		out = nil
+		_, out = s.repo.Query(deleteString)
 	}
 
 	return out
 }
 
-// Answer takes as input a NodeShape, and runs its Sparql query against the endpoint
-// In case of multiple targets, each target produces its own query, and results are concatenated
+// Answer executes shape validation queries against the endpoint for a given shape.
+// Queries are executed for each target expression, and results are merged together.
+// Results are grouped with the first column (subject) as the key.
+// Returns a grouped table with the query results.
 func (s *SparqlEndpoint) Answer(ns Shape, targets []SparqlQueryFlat) Table[rdf.Term] {
 	var out Table[rdf.Term]
 
@@ -159,7 +234,7 @@ func (s *SparqlEndpoint) Answer(ns Shape, targets []SparqlQueryFlat) Table[rdf.T
 			fmt.Println("Answer query:  \n", query)
 		}
 
-		// fmt.Sprint("adding the query ", query.String())
+		// fmt.Print("adding the query ", query.String())
 		QueryStore = append(QueryStore, query.String())
 		res, err := s.repo.Query(query.String())
 		if err != nil {
@@ -189,6 +264,7 @@ func (s *SparqlEndpoint) Answer(ns Shape, targets []SparqlQueryFlat) Table[rdf.T
 	return tmp
 }
 
+// Query executes a SPARQL SELECT query against the endpoint and returns the result as a table.
 func (s *SparqlEndpoint) Query(query SparqlQuery) Table[rdf.Term] {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query.String())
@@ -211,6 +287,8 @@ func (s *SparqlEndpoint) Query(query SparqlQuery) Table[rdf.Term] {
 	return out
 }
 
+// QueryFlat executes a flat SPARQL query (without aggregation or grouping) against the endpoint.
+// Used for target expression queries that must not produce grouped results.
 func (s *SparqlEndpoint) QueryFlat(query SparqlQueryFlat) Table[rdf.Term] {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query.String())
@@ -232,6 +310,7 @@ func (s *SparqlEndpoint) QueryFlat(query SparqlQueryFlat) Table[rdf.Term] {
 	return out
 }
 
+// QueryString executes an arbitrary SPARQL query string against the endpoint and returns results as a table.
 func (s *SparqlEndpoint) QueryString(query string) Table[rdf.Term] {
 	// query := ns.ToSparql()
 	res, err := s.repo.Query(query)

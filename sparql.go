@@ -5,44 +5,6 @@ import (
 	"strings"
 )
 
-// // Projection keeps track of the variales to be output in a query
-// type Projection struct {
-// 	vars []string
-// // }
-
-// type QueryPart interface {
-// 	Vars() string
-// 	Head(a int) string
-// 	Body(a int) string
-// }
-
-// // WhereStatements is a collection of the body of a Sparql Query
-// // This data structure is meant to expose the internal structure of each statement, allowing for
-// // composability into larger queries, and renaming variables as needed to preserve semantics
-// type WhereStatement struct {
-// 	content string
-// }
-
-// func (w WhereStatement) Body(a int) string { return w.content }
-
-// type HavingClause struct {
-// 	min      bool // false if min, true if max
-// 	numeral  int
-// 	variable string // the variable being restricted
-// 	path     string // the path over with the var was reached
-// }
-
-// func (h HavingClause) String() string {
-// 	var order string
-// 	if h.min {
-// 		order = "<="
-// 	} else {
-// 		order = ">="
-// 	}
-
-// 	return fmt.Sprint("(", h.numeral, " ", order, " COUNT(DISTINCT ", h.variable, ") )")
-// }
-
 type CountingSubQuery struct {
 	graph  string
 	target string
@@ -54,6 +16,8 @@ type CountingSubQuery struct {
 	path   PropertyPath
 }
 
+// ProduceBody generates the SPARQL subquery body for counting constraints with cardinality bounds.
+// Produces an optional graph pattern with COUNT aggregation and FILTER for min/max constraints.
 func (c CountingSubQuery) ProduceBody() string {
 	var sb strings.Builder
 
@@ -93,28 +57,31 @@ func (c CountingSubQuery) ProduceBody() string {
 type SparqlQuery struct {
 	head       []string
 	target     string   // make target explicit
-	body       []string // positive expressions that check for existance of some objects
+	body       []string // positive expressions that check for existence of some objects
 	group      []string
 	graph      string // if non-empty, then we query terms inside this named graph only
 	subqueries []CountingSubQuery
 }
 
 // SparqlQueryFlat is used for the target restrictions, these need to be "flat"; meaning no form
-// of aggregation is allowed, this is achieved by rewritten non-flattened SparqlQueries
+// of aggregation is allowed, this is achieved by rewriting non-flattened SparqlQueries
 type SparqlQueryFlat struct {
 	head  string   // only a single attribute in the head
-	body  []string // positive expressions that check for existance of some objects
+	body  []string // positive expressions that check for existence of some objects
 	graph string   // if non-empty, then we query terms inside this named graph only
 }
 
+// String converts a SparqlQuery to its full SPARQL string representation with prefixes.
 func (s SparqlQuery) String() string {
 	return s.StringPrefix(true) // by default, always include prefixes
 }
 
+// String converts a SparqlQueryFlat to its full SPARQL string representation with prefixes.
 func (s SparqlQueryFlat) String() string {
 	return s.StringPrefix(true) // by default, always include prefixes
 }
 
+// JustPrefix returns only the PREFIX declarations for a SparqlQuery without the query body.
 func (s SparqlQuery) JustPrefix() string {
 	var sb strings.Builder
 
@@ -127,6 +94,7 @@ func (s SparqlQuery) JustPrefix() string {
 	return sb.String()
 }
 
+// JustPrefix returns only the PREFIX declarations for a SparqlQueryFlat without the query body.
 func (s SparqlQueryFlat) JustPrefix() string {
 	var sb strings.Builder
 
@@ -139,6 +107,20 @@ func (s SparqlQueryFlat) JustPrefix() string {
 	return sb.String()
 }
 
+// Unused target option, to remove restriction to fixed targets
+//
+// UniversalTarget returns a SparqlQueryFlat that matches every node in the graph,
+// used by AllCondAnswers when rules are present to evaluate shapes against all nodes
+// rather than restricting to declared SHACL targets.
+// func UniversalTarget() SparqlQueryFlat {
+// 	return SparqlQueryFlat{
+// 		head: "?sub ?indirect0",
+// 		body: []string{"{ ?sub ?p ?obj . } UNION { ?obj ?p ?sub . }"},
+// 	}
+// }
+
+// ProjectToVar transforms a flat query by reprojecting its results to a different variable.
+// If external is true, treats the query as targeting property values; otherwise targets the focus node.
 func (s SparqlQueryFlat) ProjectToVar(variable string, external bool) (out SparqlQueryFlat) {
 	var head string
 
@@ -158,6 +140,8 @@ func (s SparqlQueryFlat) ProjectToVar(variable string, external bool) (out Sparq
 	return out
 }
 
+// StringPrefix renders a SparqlQuery as a SPARQL SELECT string.
+// If attachPrefix is true, includes PREFIX declarations; otherwise produces a subquery.
 func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 	var sb strings.Builder
 
@@ -184,14 +168,25 @@ func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 
 	if len(s.subqueries) == 0 {
 		if s.graph != "" {
-			sb.WriteString(" GRAPH " + s.graph + " ")
+			sb.WriteString(" GRAPH " + s.graph + " { \n\t")
 		}
 		sb.WriteString(s.target + "\n\t")
-	}
-
-	sb.WriteString(strings.Join(s.body, "\n\t"))
-
-	if len(s.subqueries) > 0 {
+		sb.WriteString(strings.Join(s.body, "\n\t"))
+		if s.graph != "" {
+			sb.WriteString("\n\t} \n\t")
+		}
+	} else {
+		if s.graph != "" {
+			sb.WriteString(" GRAPH " + s.graph + " { \n\t")
+			sb.WriteString(s.target + "\n\t")
+			if len(s.body) > 0 {
+				sb.WriteString(strings.Join(s.body, "\n\t"))
+			}
+			sb.WriteString("\n\t} \n\t")
+		} else {
+			sb.WriteString(s.target + "\n\t")
+			sb.WriteString(strings.Join(s.body, "\n\t"))
+		}
 		for _, c := range s.subqueries {
 			if s.graph != "" {
 				sb.WriteString(" GRAPH " + s.graph + " ")
@@ -209,6 +204,8 @@ func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 	return sb.String()
 }
 
+// StringPrefix renders a SparqlQueryFlat as a SPARQL SELECT string.
+// If attachPrefix is true, includes PREFIX declarations; otherwise produces a subquery body.
 func (s SparqlQueryFlat) StringPrefix(attachPrefix bool) string {
 	var sb strings.Builder
 
@@ -221,13 +218,6 @@ func (s SparqlQueryFlat) StringPrefix(attachPrefix bool) string {
 	}
 
 	sb.WriteString("\n\n")
-
-	// // get extended header and body
-	// for i := range s.subqueries {
-	// 	renamedBody, renamedHead := s.subqueries[i].Rename(i)
-	// 	s.head = append(s.head, renamedHead...)
-	// 	s.body = append(s.body, renamedBody...)
-	// }
 
 	sb.WriteString("SELECT ")
 	sb.WriteString(s.head)
@@ -245,18 +235,3 @@ func (s SparqlQueryFlat) StringPrefix(attachPrefix bool) string {
 
 	return sb.String()
 }
-
-// // Body produces the needed where statements (combined into single string) to intersect one query
-// // with another. This is meant to realise intrinsic dep. between shapes, i.e. restricting the
-// // same value nodes further by conditions to be tested directly on those value nodes
-// // This integration does not add any new variables to the projection, it only produces
-// // further statements to be added to the body.
-// func (s SparqlQuery) Body(a int) string {
-// 	var sb strings.Builder
-
-// 	s.Rename(a)
-
-// 	sb.WriteString()
-
-// 	return sb.String()
-// }

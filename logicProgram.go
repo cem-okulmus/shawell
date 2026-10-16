@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"runtime"
+	"sort"
 	"strings"
 
 	rdf "github.com/cem-okulmus/rdf2go-1"
@@ -15,56 +18,87 @@ import (
 )
 
 // the hardcoded address to DLV
-var dlv string = "bin/dlv"
+var dlv string = func() string {
+	if runtime.GOOS == "windows" {
+		return "bin/dlv.exe"
+	}
+	return "bin/dlv"
+}()
 var demoLP bool
 
 var (
-	renameMap  map[string]string
-	reverseMap map[string]string
+	renameMap  map[rdf.Term]string
+	reverseMap map[string]rdf.Term
 )
 
+// rewrite generates a unique term identifier for an RDF term that hasn't been encoded yet.
+// Maintains bidirectional mappings between original terms and their encoded identifiers.
 func rewrite(term rdf.Term) string {
 	if demoLP {
 		return term.RawValue()
 	}
 
 	// check if already encoded
-	if _, ok := reverseMap[term.RawValue()]; ok {
-		return reverseMap[term.RawValue()]
+	if encoding, ok := renameMap[term]; ok {
+		return encoding
 	}
 
-	newTerm := fmt.Sprint("term", theCount)
+	var prefix string
+	switch v := term.(type) {
+	case rdf.Resource:
+		prefix = "iri" // these must be lower-case, since they are constants (in DLV syntax)!
+	case rdf.BlankNode:
+		prefix = "blank"
+	case rdf.Literal:
+		prefix = "literal"
+	default:
+		fmt.Println("Type of term is: ", v)
+		log.Panicln("Unknown type of rdf.Term.")
+		// 	prefix = "Xerm"
+	}
+
+	newTerm := fmt.Sprint(prefix, theCount)
 	theCount++
 
-	reverseMap[term.RawValue()] = newTerm
-	renameMap[newTerm] = term.RawValue()
+	reverseMap[newTerm] = term
+	renameMap[term] = newTerm
 
-	// testString := removeAbbr(strings.ToLower(term.RawValue()))
-	// rewriteSuccess := false
-
-	// for !rewriteSuccess {
-	// 	if oldTerm, ok := renameMap[testString]; ok {
-	// 		if oldTerm == term.RawValue() { // trying to encode the same string again
-	// 			// fmt.Println("found exsisting term", term.RawValue())
-	// 			return testString
-	// 		} else { // CONFLICT!
-	// 			// fmt.Println("Conflict: ", oldTerm, " ", term)
-	// 			testString = testString + "conflict"
-	// 			continue
-	// 		}
-	// 	}
-	// 	renameMap[testString] = term.RawValue()
-	// 	rewriteSuccess = true
-	// }
 	return newTerm
 }
 
-type rule struct {
+// // decode reconstructs an rdf.Term from an encoded string produced by rewrite.
+// // It uses the prefix ("iri", "blank", "literal") to determine the concrete type
+// // and looks up the original raw value in renameMap.
+// func decode(encoded string) (rdf.Term, bool) {
+// 	raw, present := renameMap[encoded]
+
+// 	if present == false {
+// 		return nil, present
+// 	}
+// 	switch {
+// 	case strings.HasPrefix(encoded, "iri"):
+// 		return rdf.NewResource(raw), present
+// 	case strings.HasPrefix(encoded, "blank"):
+// 		return rdf.NewBlankNode(raw), present
+// 	case strings.HasPrefix(encoded, "literal"):
+// 		return rdf.NewLiteral(raw), present
+// 	case strings.HasPrefix(encoded, "term"):
+// 		log.Panicln("Old term encoding still used somewhere.")
+// 		return nil, present
+// 	default: // in this case, res is being used to create a new IRI from a rawValue string
+// 		log.Panicln("Illformated string present in renameMap: ", encoded)
+// 		return nil, present
+// 	}
+// }
+
+// serialisedRule represents the serialised logic program
+type serialisedRule struct {
 	head string
 	body []string
 }
 
-func (r rule) rewrite(replace, with string) rule {
+// rewrite updates all occurrences of a substring in both the head and body of a rule.
+func (r serialisedRule) rewrite(replace, with string) serialisedRule {
 	head := strings.ReplaceAll(r.head, replace, with)
 	body := make([]string, len(r.body))
 	copy(body, r.body)
@@ -73,36 +107,38 @@ func (r rule) rewrite(replace, with string) rule {
 		body[i] = strings.ReplaceAll(body[i], replace, with)
 	}
 
-	return rule{head: head, body: body}
+	return serialisedRule{head: head, body: body}
 }
 
-type program struct {
-	rules []rule
+type serialisedProgram struct {
+	rules []serialisedRule
 }
 
-func (p program) IsEmpty() bool {
+// IsEmpty returns true if the logic program contains no rules.
+func (p serialisedProgram) IsEmpty() bool {
 	return len(p.rules) == 0
 }
 
 const (
 	MaxUint = ^uint(0)
-	MinUint = 0
 	MaxInt  = int(MaxUint >> 1)
-	MinInt  = -MaxInt - 1
 )
 
 type DLVAnswer struct {
-	Negation  string   ` @"-"? `
-	Predicate string   ` @(Number|Ident|String) `
-	Constant  []string `"("  @ (( Number|Ident|String) ","?)*  ")" `
+	Negation  string   `parser:" @\"-\"? "`
+	Predicate string   `parser:" @(Number|Ident|String) "`
+	Constant  []string `parser:"\"(\" [ @(Number|Ident|String) { \",\" @(Number|Ident|String) } ] \")\""`
 }
 
 type DLVOutput struct {
-	Answers []DLVAnswer ` "True:" "{" ( @@ ","?)* "}" (String|Ident|Number|Punct) "{" (Number|Ident|String|Punct|"("|")"|","|" ")*  "}" `
+	Answers          []DLVAnswer `parser:" \"True:\" \"{\" ( @@ \",\"?)* \"}\" "`
+	UndefinedAnswers []DLVAnswer `parser:" \"Undefined:\" \"{\" ( @@ \",\"?)* \"}\" "`
 }
 
+// ToTables converts a DLV output into a slice of result tables, one per arity level.
+// Each row contains [decoded_predicate, decoded_arg0, ...]; predicate is column 0.
 func (d DLVOutput) ToTables() (out []Table[rdf.Term]) {
-	answerMap := make(map[string][]string)
+	arityMap := make(map[int][][]string)
 
 	for i := range d.Answers {
 
@@ -112,18 +148,28 @@ func (d DLVOutput) ToTables() (out []Table[rdf.Term]) {
 
 		p, v := d.Answers[i].Predicate, d.Answers[i].Constant
 
-		prev, ok := answerMap[p]
+		arity := len(v) + 1
+		tuple := []string{p}
+		tuple = append(tuple, v...)
+
+		prev, ok := arityMap[arity]
 		if !ok {
-			answerMap[p] = []string{v[0]}
+			arityMap[arity] = [][]string{tuple}
 		} else {
-			answerMap[p] = append(prev, v[0])
+			arityMap[arity] = append(prev, tuple)
 		}
 	}
 
-	for k, v := range answerMap {
+	for k, v := range arityMap {
 		var tmp TableSimple[rdf.Term]
 
-		tmp.header = append(tmp.header, k)
+		header := []string{"predicate"}
+
+		for i := range k - 1 {
+			header = append(header, fmt.Sprint("argument ", i))
+		}
+
+		tmp.header = append(tmp.header, header...)
 
 		// fmt.Println("Map content")
 		// for k, v := range renameMap {
@@ -131,9 +177,27 @@ func (d DLVOutput) ToTables() (out []Table[rdf.Term]) {
 		// }
 
 		for i := range v {
-			actualValue := renameMap[v[i]]
-			// fmt.Println("Actual Value ", actualValue, " of term ", v[i])
-			tmp.content = append(tmp.content, []rdf.Term{res(actualValue)})
+			var actualTuple []rdf.Term
+
+			for num, c := range v[i] {
+
+				// column 0 used for the predicate -> never encoded hence nothing to decode
+				if num == 0 {
+					actualTuple = append(actualTuple, rdf.NewResource(c))
+				} else {
+					decoded, present := reverseMap[c]
+
+					if !present {
+						actualTuple = append(actualTuple, rdf.NewResource(c))
+					} else {
+						actualTuple = append(actualTuple, decoded)
+					}
+
+				}
+
+			}
+
+			tmp.content = append(tmp.content, actualTuple)
 		}
 
 		out = append(out, &tmp)
@@ -142,10 +206,62 @@ func (d DLVOutput) ToTables() (out []Table[rdf.Term]) {
 	return out
 }
 
-// Answer sends the logic program to DLV, set to use well-founded semantics, and returns the output
-func (p program) Answer(debug bool) []Table[rdf.Term] {
+// UndefinedToTables converts the Undefined set of a DLV output into tables, one per arity level.
+func (d DLVOutput) UndefinedToTables() (out []Table[rdf.Term]) {
+	arityMap := make(map[int][][]string)
+
+	for i := range d.UndefinedAnswers {
+		if d.UndefinedAnswers[i].Negation != "" {
+			continue
+		}
+		p, v := d.UndefinedAnswers[i].Predicate, d.UndefinedAnswers[i].Constant
+		arity := len(v) + 1
+		tuple := []string{p}
+		tuple = append(tuple, v...)
+		prev, ok := arityMap[arity]
+		if !ok {
+			arityMap[arity] = [][]string{tuple}
+		} else {
+			arityMap[arity] = append(prev, tuple)
+		}
+	}
+
+	for k, v := range arityMap {
+		var tmp TableSimple[rdf.Term]
+		header := []string{"predicate"}
+		for i := range k - 1 {
+			header = append(header, fmt.Sprint("argument ", i))
+		}
+		tmp.header = append(tmp.header, header...)
+		for i := range v {
+			var actualTuple []rdf.Term
+			for num, c := range v[i] {
+				// column 0 used for the predicate -> never encoded hence nothing to decode
+				if num == 0 {
+					actualTuple = append(actualTuple, rdf.NewResource(c))
+				} else {
+					decoded, present := reverseMap[c]
+
+					if !present {
+						actualTuple = append(actualTuple, rdf.NewResource(c))
+					} else {
+						actualTuple = append(actualTuple, decoded)
+					}
+
+				}
+			}
+			tmp.content = append(tmp.content, actualTuple)
+		}
+		out = append(out, &tmp)
+	}
+	return out
+}
+
+// runDLV invokes DLV under well-founded semantics and returns the parsed output.
+// When debug is true the raw DLV output is printed, passed through DecodedString.
+func (p serialisedProgram) runDLV(debug bool, nofacts bool) (DLVOutput, bool) {
 	if p.IsEmpty() {
-		return []Table[rdf.Term]{}
+		return DLVOutput{}, false
 	}
 
 	graphLexer := lexer.Must(ebnf.New(`
@@ -161,19 +277,33 @@ func (p program) Answer(debug bool) []Table[rdf.Term] {
     any = "\u0000"…"\uffff" .
     `))
 
-	cmd := exec.Command(dlv, "--wellfounded")
+	args := []string{"--wellfounded"}
+	if nofacts {
+		args = []string{"--wellfounded", "--no-facts"}
+	}
 
+	cmd := exec.Command(dlv, args...)
 	outLP := p.String()
-
 	cmd.Stdin = strings.NewReader(outLP)
 
-	out, err := cmd.Output()
-	check(err)
-
+	out, err := cmd.CombinedOutput()
 	outString := string(out)
 
+	if strings.Contains(outString, "INCOHERENT") {
+		fmt.Fprintln(os.Stderr, "DLV semantic error: the logic program is incoherent (no model exists).")
+		fmt.Fprintln(os.Stderr, "DLV output:\n", outString)
+		os.Exit(1)
+	}
+	if strings.Contains(outString, "Safety Error") {
+		fmt.Fprintln(os.Stderr, "DLV semantic error: safety violation detected (a variable appears only under negation without a positive occurrence).")
+		fmt.Fprintln(os.Stderr, "DLV output:\n", outString)
+		os.Exit(1)
+	}
+
+	check(err)
+
 	if debug {
-		fmt.Println("----\n\n", outString, "\n\n-------")
+		fmt.Println("----\n\n", DecodedString(outString), "\n\n-------")
 	}
 
 	parser := participle.MustBuild(&DLVOutput{}, participle.UseLookahead(1), participle.Lexer(graphLexer),
@@ -189,10 +319,21 @@ func (p program) Answer(debug bool) []Table[rdf.Term] {
 		log.Panicln("input for parser: ", outString, "\n \n", err)
 	}
 
-	return parsedDLVOutput.ToTables()
+	return parsedDLVOutput, true
 }
 
-func (p program) String() string {
+// Answer sends the logic program to DLV configured for well-founded semantics and returns the computed interpretation.
+// Returns (true tables, undefined tables), each grouped by predicate arity.
+func (p serialisedProgram) Answer(debug bool, nofacts bool) ([]Table[rdf.Term], []Table[rdf.Term]) {
+	out, ok := p.runDLV(debug, nofacts)
+	if !ok {
+		return []Table[rdf.Term]{}, []Table[rdf.Term]{}
+	}
+	return out.ToTables(), out.UndefinedToTables()
+}
+
+// String returns a string representation of the logic program with all rules.
+func (p serialisedProgram) String() string {
 	var sb strings.Builder
 
 	for _, r := range p.rules {
@@ -206,13 +347,42 @@ func (p program) String() string {
 	return sb.String()
 }
 
+// DecodedString returns a human-readable string representation of the logic program
+// where each encoded term (e.g. iri0, literal3) is replaced by its original RDF value.
+// Keys are applied longest-first to prevent partial-match corruption (e.g. iri10 vs iri1).
+// Note: intended for debug use only; may mis-decode if original values contain encoded-looking substrings (e.g. "http://ex.org/iri1" ).
+func DecodedString(encoded string) string {
+
+	// collect keys sorted by descending length
+	keys := make([]string, 0, len(reverseMap))
+	for k := range reverseMap {
+		keys = append(keys, k)
+	}
+
+	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
+
+	for _, k := range keys {
+		encoded = strings.ReplaceAll(encoded, k, reverseMap[k].RawValue())
+	}
+
+	return abbr(encoded)
+}
+
 var (
 	qual    int = 1
 	xoneVar int = 1
 	orVar   int = 1
 )
 
-func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, header, element string) (out []rule) {
+// TODO expandRules needs to be heavily rewritten.
+// It creates a set of rules that together ensure
+// that a given shape name can be derived. The current
+// code is super convoluted and prone to failure (and kind of impressive it even works)
+// What is needed: a way to systemically modify and "split" rules
+
+// expandRules generates logic program rules for handling SHACL constraints.
+// It creates rules that encode cardinality constraints, disjointness, and other logical conditions.
+func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, header, element string) (out []serialisedRule) {
 	// valuesSlice := strings.Split(strings.ToLower(values.RawValue()), " ")
 
 	// for i := range valuesSlice {
@@ -221,7 +391,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 	head := fmt.Sprint(header, "(", element, ")")
 
-	var externalRules []rule // these are needed in qualifiedShape and XONE, and don't directly
+	var externalRules []serialisedRule // these are needed in qualifiedShape and XONE, and don't directly
 	// concern the general rule for this shape and element
 
 	for _, i := range indices {
@@ -236,7 +406,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			}
 
 			if len(out) == 0 {
-				out = append(out, rule{head: head, body: body})
+				out = append(out, serialisedRule{head: head, body: body})
 			} else {
 				for j := range out {
 					if len(out[j].body) == 0 {
@@ -248,14 +418,14 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 		case or:
 			var bodyOr []string
 
-			var orRules []rule
+			var orRules []serialisedRule
 
 			// var bodyOne []string
 			for _, v := range valuesSlice {
 				bodyOr = append(bodyOr, fmt.Sprint("OrShape", orVar, "(", rewrite(v), ")"))
 
 				for _, ref := range deps[i].name {
-					orRules = append(orRules, rule{
+					orRules = append(orRules, serialisedRule{
 						head: fmt.Sprint("OrShape", orVar, "(", rewrite(v), ")"),
 						body: []string{fmt.Sprint(ref.ref.GetLogName(), "(", rewrite(v), ")")},
 					})
@@ -263,9 +433,8 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			}
 
 			if len(out) == 0 {
-				out = append(out, rule{head: head, body: bodyOr})
+				out = append(out, serialisedRule{head: head, body: bodyOr})
 			} else {
-				var newOut []rule
 			here:
 				for j := range out {
 					if len(out[j].body) == 0 {
@@ -273,7 +442,6 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 					}
 					out[j].body = append(out[j].body, bodyOr...) // attach the orRules to all prior rules
 				}
-				out = newOut
 			}
 
 			// adding the value-specific or rules
@@ -288,7 +456,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			}
 
 			if len(out) == 0 {
-				out = append(out, rule{head: head, body: body})
+				out = append(out, serialisedRule{head: head, body: body})
 			} else {
 				for j := range out {
 					if len(out[j].body) == 0 {
@@ -306,7 +474,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				refs = append(refs, deps[i].name[k].GetLogName())
 			}
 
-			var genericXONErules []rule
+			var genericXONErules []serialisedRule
 
 			headXONEgeneric := fmt.Sprint("XONE_TERM_", xoneVar, "( VAR )")
 
@@ -321,11 +489,11 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 					}
 					body = append(body, fmt.Sprint(presPos, refs[j], "( VAR )"))
 				}
-				genericXONErules = append(genericXONErules, rule{head: headXONEgeneric, body: body})
+				genericXONErules = append(genericXONErules, serialisedRule{head: headXONEgeneric, body: body})
 			}
 
 			// produce bound rules
-			var boundRules []rule
+			var boundRules []serialisedRule
 
 			for v := range valuesSlice {
 				for r := range genericXONErules {
@@ -333,7 +501,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				}
 			}
 
-			var specificXONErule rule
+			var specificXONErule serialisedRule
 
 			specificXONErule.head = fmt.Sprint("XONE_", xoneVar, "( ", element, " )")
 
@@ -343,7 +511,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			// attach the XONE shape predicate to all prior rules
 			if len(out) == 0 {
-				out = append(out, rule{head: head, body: []string{specificXONErule.head}})
+				out = append(out, serialisedRule{head: head, body: []string{specificXONErule.head}})
 			} else {
 				for j := range out {
 					if len(out[j].body) == 0 {
@@ -360,6 +528,21 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			xoneVar++
 		case qualified: // will require crazy combinatorics
 			ref := deps[i].name[0].GetLogName() // like not, qualified can only have single reference
+
+			// When disjoint, any node matching a sibling qualified shape is excluded from counting.
+			// Siblings are all other qualified deps not belonging to the current column (indices).
+			var siblingRefs []string
+			if deps[i].disjoint {
+				inCurrent := make(map[int]bool)
+				for _, idx := range indices {
+					inCurrent[idx] = true
+				}
+				for si, d := range deps {
+					if d.mode == qualified && !inCurrent[si] {
+						siblingRefs = append(siblingRefs, d.name[0].GetLogName())
+					}
+				}
+			}
 
 			mark := fmt.Sprint("Qual", qual)
 			atLeast := fmt.Sprint("AtLeast", qual)
@@ -411,7 +594,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				}
 			}
 
-			qualifiedRule := rule{
+			qualifiedRule := serialisedRule{
 				head: head,
 				body: strings.Split(tmp, ", "),
 			}
@@ -461,55 +644,63 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				v_i := rewrite(v)
 				if i == 0 {
 					externalRules = append(externalRules,
-						rule{head: fmt.Sprint(mark, "(", 0, ", ", v_i, ")")})
+						serialisedRule{head: fmt.Sprint(mark, "(", 0, ", ", v_i, ")")})
 					if i != len(valuesSlice)-1 {
 						v_ii := rewrite(valuesSlice[i+1])
-						externalRules = append(externalRules, rule{
+						externalRules = append(externalRules, serialisedRule{
 							head: fmt.Sprint(mark, "(", v_i, ", ", v_ii, ")"),
 						})
 					}
 
 				} else if i == len(valuesSlice)-1 {
-					externalRules = append(externalRules, rule{
+					externalRules = append(externalRules, serialisedRule{
 						head: fmt.Sprint(mark, "(", v_i, ", ", 1, ")"),
 					})
 				} else {
 					v_ii := rewrite(valuesSlice[i+1])
-					externalRules = append(externalRules, rule{
+					externalRules = append(externalRules, serialisedRule{
 						head: fmt.Sprint(mark, "(", v_i, ", ", v_ii, ")"),
 					})
 				}
 			}
 
 			// AtLeastRules
-			externalRules = append(externalRules, rule{
+			externalRules = append(externalRules, serialisedRule{
 				head: fmt.Sprint(atLeast, "(X,0)"),
 				body: []string{fmt.Sprint(mark, "(0,X)")},
 			})
-			externalRules = append(externalRules, rule{
+			bodyBase1 := []string{
+				fmt.Sprint(mark, "(0,X) "),
+				fmt.Sprint(ref, "(X)"),
+			}
+			for _, sib := range siblingRefs {
+				bodyBase1 = append(bodyBase1, fmt.Sprint("not ", sib, "(X)"))
+			}
+			externalRules = append(externalRules, serialisedRule{
 				head: fmt.Sprint(atLeast, "(X,1)"),
-				body: []string{
-					fmt.Sprint(mark, "(0,X) "),
-					fmt.Sprint(ref, "(X)"),
-				},
+				body: bodyBase1,
 			})
-			externalRules = append(externalRules, rule{
+			externalRules = append(externalRules, serialisedRule{
 				head: fmt.Sprint(atLeast, "(Y,Z)"),
 				body: []string{
 					fmt.Sprint(mark, "(X,Y) "),
 					fmt.Sprint(atLeast, "(X,Z)"),
 				},
 			})
-			externalRules = append(externalRules, rule{
+			bodyStep := []string{
+				fmt.Sprint(mark, "(X,Y) "),
+				fmt.Sprint(atLeast, "(X,Z)"),
+				fmt.Sprint(ref, "(Y)"),
+			}
+			for _, sib := range siblingRefs {
+				bodyStep = append(bodyStep, fmt.Sprint("not ", sib, "(Y)"))
+			}
+			externalRules = append(externalRules, serialisedRule{
 				head: fmt.Sprint(atLeast, "(Y,Z+1)"),
-				body: []string{
-					fmt.Sprint(mark, "(X,Y) "),
-					fmt.Sprint(atLeast, "(X,Z)"),
-					fmt.Sprint(ref, "(Y)"),
-				},
+				body: bodyStep,
 			})
 
-			externalRules = append(externalRules, rule{
+			externalRules = append(externalRules, serialisedRule{
 				head: fmt.Sprint(atLeast, "Un(Y)"),
 				body: []string{
 					fmt.Sprint(atLeast, "(X,Y)"),
@@ -525,23 +716,23 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 	return out
 }
 
-// GetLogNameFromQualName is meant to transform a LogName into a QualName. Edge case: sometimes the attribute 
+// GetLogNameFromQualName is meant to transform a LogName into a QualName. Edge case: sometimes the attribute
 // check is already in QualName, so in that case we just return it again.
 func (s ShaclDocument) GetLogNameFromQualName(name string) (string, error) {
 
 	for _, v := range s.shapeNames {
 		switch vType := v.(type) {
 		case *PropertyShape:
-			if v.GetQualName() == name || v.GetLogName() == name  {
+			if v.GetQualName() == name || v.GetLogName() == name {
 				return v.GetLogName(), nil
 			}
 			test := NodeShape{}
 			test.id = vType.id
-			if test.GetQualName() == name || test.GetLogName() == name  {
+			if test.GetQualName() == name || test.GetLogName() == name {
 				return v.GetLogName(), nil
 			}
 		case *NodeShape:
-			if v.GetQualName() == name || v.GetLogName() == name  {
+			if v.GetQualName() == name || v.GetLogName() == name {
 				return v.GetLogName(), nil
 			}
 		}
@@ -550,7 +741,9 @@ func (s ShaclDocument) GetLogNameFromQualName(name string) (string, error) {
 	return "", errors.New("no shape with this qualname found: " + name)
 }
 
-func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency, internalDeps bool) (out program) {
+// TableToLP converts a table representation of conditional answers into logic program rules.
+// Each row in the table becomes facts or rules in the generated program.
+func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency, internalDeps bool) (out serialisedProgram) {
 	table, ok := tablePreCast.(*GroupedTable[rdf.Term])
 	if !ok {
 		log.Panicln("Passed a non-group Tabled")
@@ -640,7 +833,7 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 		log.Panicln("Couldn't find a matching attribute for every dep")
 	}
 
-	generalRule := rule{head: head, body: body}
+	generalRule := serialisedRule{head: head, body: body}
 
 	// fmt.Println("Gotten general rule", generalRule)
 
@@ -652,7 +845,7 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 			generalRuleNew := generalRule.rewrite("VAR", rewrite(element))
 			out.rules = append(out.rules, generalRuleNew)
 
-			var tempRules []rule // collection of all rules generated so far
+			var tempRules []serialisedRule // collection of all rules generated so far
 			// expandRules for target if InternDep
 			tempRules = expandRules([]rdf.Term{element}, attrMap[0], deps, headerName+"INTERN", rewrite(element))
 
@@ -665,7 +858,7 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 			generalRuleNew := generalRule.rewrite("VAR", rewrite(element))
 			out.rules = append(out.rules, generalRuleNew)
 
-			var tempRules []rule // collection of all rules generated so far
+			var tempRules []serialisedRule // collection of all rules generated so far
 
 			// expandRules for target if InternDep
 			if internalDeps {
@@ -688,8 +881,9 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 	return out
 }
 
-// FactsToLP assumes that the input is a unary table, ie. with only one column, will panic otherwise
-func (s ShaclDocument) FactsToLP(table Table[rdf.Term]) (out program) {
+// FactsToLP converts a unary table (single column) of facts into logic program facts.
+// Panics if the input table has more than one column.
+func (s ShaclDocument) FactsToLP(table Table[rdf.Term]) (out serialisedProgram) {
 	header := table.GetHeader()
 	if len(header) != 1 {
 		log.Panic("FactsToLP requires unary table as input.")
@@ -702,13 +896,15 @@ func (s ShaclDocument) FactsToLP(table Table[rdf.Term]) (out program) {
 	check(err)
 
 	for row := range table.IterRows() {
-		out.rules = append(out.rules, rule{head: fmt.Sprint(headerName, "(", rewrite(row[0]), ")")})
+		out.rules = append(out.rules, serialisedRule{head: fmt.Sprint(headerName, "(", rewrite(row[0]), ")")})
 	}
 
 	return out
 }
 
-func (s ShaclDocument) GetOneLP(name string) (out program) {
+// GetOneLP generates a logic program encoding all constraints for a single named shape.
+// Returns the combined program with facts and rules for the shape and its dependencies.
+func (s ShaclDocument) GetOneLP(name string) (out serialisedProgram) {
 	if !s.answered {
 		log.Panicln("Cannot produce logic programs, before conditional answers have been computed.")
 	}
@@ -755,7 +951,9 @@ func (s ShaclDocument) GetOneLP(name string) (out program) {
 	return s.TableToLP(condTable, deps, areInternalDeps)
 }
 
-func (s ShaclDocument) GetAllLPs() (out program) {
+// GetAllLPs generates a logic program encoding all constraints for all shapes in the document.
+// Returns a unified program that can be sent to the DLV solver.
+func (s ShaclDocument) GetAllLPs() (out serialisedProgram) {
 	for name, value := range s.shapeNames {
 
 		// fmt.Println("Producing LP for shape ", value.GetQualName())

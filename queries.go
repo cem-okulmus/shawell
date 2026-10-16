@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// ToSparql produces a stand-alone sparql query that produces the list of nodes satisfying the
-// shape in the RDF graph
+// ToSparql produces a stand-alone SPARQL query that returns the list of nodes satisfying the property shape.
+// Wraps the property with a temporary node shape containing only this property constraint.
 func (p *PropertyShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out SparqlQuery) {
 	// this will basically just call ToSubquery, but instead turn it into an object of type
 	// SparqlQuery, corresponding to a single node shape only having this property as a constraint
@@ -22,9 +22,9 @@ func (p *PropertyShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out 
 	return tmp.ToSparql(fromGraph, target)
 }
 
-// ToSubquery is used to embedd the property shape into a node shape by way of a subquery in the
-// body, and number of variables in the head. The head variables are only included in the
-// presence of referential constraints (and,or,xone,node,not, qualifiedValueShape)
+// ToSubquery embeds a property shape into a node shape's SPARQL query via a subquery.
+// Returns head variables for optional referential constraints and body statements for object matching.
+// If the property has cardinality constraints, also returns a counting subquery.
 func (p *PropertyShape) ToSubquery(num int) (head []string, body string, subquery *CountingSubQuery) {
 	objName := "?InnerObj" + strconv.Itoa(num)
 	path := p.path
@@ -93,11 +93,10 @@ func (p *PropertyShape) ToSubquery(num int) (head []string, body string, subquer
 	return head, body, subquery
 }
 
-// ToSparql produces a Sparql query that when run against an endpoint returns
-// the list of potential nodes satisying the shape, as well as a combination of
-// other nodes expressiong a conditional shape dependency such that any
-// potential node is only satisfied if and only if the conditional nodes have
-// or do not have the specified shapes.
+// ToSparql generates a SPARQL query that retrieves nodes satisfying the given shape constraints and optional properties.
+// Used to compute conditional answers.
+// Constructs SELECT with qualified variable names, WHERE clause with all constraint conditions,
+// GROUP BY clauses for aggregation, and optional GRAPH clause for named graphs.
 func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out SparqlQuery) {
 	var head []string // variables and renamings appearing inside the SELECT statement
 	var body []string // statements that form the inside of the WHERE clause
@@ -131,11 +130,12 @@ func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out Spar
 	for i := range n.others {
 		body = append(body, n.others[i].SparqlBody("?sub", nil))
 	}
+
+	// while the standard does not permit property pair constraints to be defined for NodeShapes,
+	// this is included here, since the Test Suites check for this (for whatever reason)
 	for i := range n.propairconts {
 		body = append(body, n.propairconts[i].SparqlBody("?sub", nil))
 	}
-
-	// leaving out property pair constraints; cannot appear inside node shape
 
 	for i, p := range n.properties {
 		if p.Nested() {
@@ -154,7 +154,6 @@ func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out Spar
 			subqueries = append(subqueries, *subquery)
 		}
 
-		// fmt.Println("The body atom for property: ", p.shape.IRI)
 		// fmt.Println(p.ToSubquery(i))
 		if len(p.shape.deps) > 0 { // add needed projections to later check dependencies
 			nameOfRef := p.GetQualName()

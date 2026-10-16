@@ -1,0 +1,72 @@
+@prefix ex: <http://datashapes.org/sh/tests/core/node/equals-path-001.test#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix sht: <http://www.w3.org/ns/shacl-test#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Shape: sh:equals ( ex:step1 ex:step2 )  (sequence path)
+# Constraint: focus node must equal every node reachable via ex:step1/ex:step2 from itself
+
+ex:TestShape
+  rdf:type sh:NodeShape ;
+  sh:equals ( ex:step1 ex:step2 ) ;
+  sh:targetNode ex:ValidResource1 ;
+  sh:targetNode ex:InvalidResource1 ;
+  sh:targetNode ex:InvalidResource2 ;
+.
+
+# ValidResource1: step1/step2 reaches ValidResource1 (itself) → valid
+ex:ValidResource1
+  ex:step1 ex:IntermNode1 ;
+.
+ex:IntermNode1
+  ex:step2 ex:ValidResource1 ;
+.
+
+# InvalidResource1: step1/step2 reaches ex:OtherNode (not itself) → violation, sh:value ex:OtherNode
+ex:InvalidResource1
+  ex:step1 ex:IntermNode2 ;
+.
+ex:IntermNode2
+  ex:step2 ex:OtherNode ;
+.
+
+# InvalidResource2: no ex:step1 triples → step1/step2 reaches nothing → violation, sh:value ex:InvalidResource2
+
+<>
+  rdf:type mf:Manifest ;
+  mf:entries (
+      <equals-path-001>
+    ) ;
+.
+<equals-path-001>
+  rdf:type sht:Validate ;
+  rdfs:label "Test of sh:equals with sequence path argument at node shape 001" ;
+  mf:action [
+      sht:dataGraph <> ;
+      sht:shapesGraph <> ;
+    ] ;
+  mf:result [
+      rdf:type sh:ValidationReport ;
+      sh:conforms "false"^^xsd:boolean ;
+      sh:result [
+          rdf:type sh:ValidationResult ;
+          sh:focusNode ex:InvalidResource1 ;
+          sh:resultSeverity sh:Violation ;
+          sh:sourceConstraintComponent sh:EqualsConstraintComponent ;
+          sh:sourceShape ex:TestShape ;
+          sh:value ex:OtherNode ;
+        ] ;
+      sh:result [
+          rdf:type sh:ValidationResult ;
+          sh:focusNode ex:InvalidResource2 ;
+          sh:resultSeverity sh:Violation ;
+          sh:sourceConstraintComponent sh:EqualsConstraintComponent ;
+          sh:sourceShape ex:TestShape ;
+          sh:value ex:InvalidResource2 ;
+        ] ;
+    ] ;
+  mf:status sht:approved ;
+.
