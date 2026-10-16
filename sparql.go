@@ -31,7 +31,9 @@ func (c CountingSubQuery) ProduceBody() string {
 	sb.WriteString(strings.Join(head, " "))
 	sb.WriteString(" { \n\t")
 	if c.graph != "" {
-		sb.WriteString(" GRAPH " + c.graph + " ")
+		sb.WriteString(" GRAPH ")
+		sb.WriteString(c.graph)
+		sb.WriteString(" ")
 	}
 	sb.WriteString(strings.Join(body, "\n\t"))
 
@@ -88,7 +90,11 @@ func (s SparqlQuery) JustPrefix() string {
 	// attach prefixes
 
 	for k, v := range prefixes {
-		sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+		sb.WriteString("PREFIX ")
+		sb.WriteString(k)
+		sb.WriteString(" <")
+		sb.WriteString(v)
+		sb.WriteString(">\n")
 	}
 
 	return sb.String()
@@ -101,7 +107,11 @@ func (s SparqlQueryFlat) JustPrefix() string {
 	// attach prefixes
 
 	for k, v := range prefixes {
-		sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+		sb.WriteString("PREFIX ")
+		sb.WriteString(k)
+		sb.WriteString(" <")
+		sb.WriteString(v)
+		sb.WriteString(">\n")
 	}
 
 	return sb.String()
@@ -149,7 +159,11 @@ func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 
 	if attachPrefix {
 		for k, v := range prefixes {
-			sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+			sb.WriteString("PREFIX ")
+			sb.WriteString(k)
+			sb.WriteString(" <")
+			sb.WriteString(v)
+			sb.WriteString(">\n")
 		}
 	}
 
@@ -168,28 +182,37 @@ func (s SparqlQuery) StringPrefix(attachPrefix bool) string {
 
 	if len(s.subqueries) == 0 {
 		if s.graph != "" {
-			sb.WriteString(" GRAPH " + s.graph + " { \n\t")
+			sb.WriteString(" GRAPH ")
+			sb.WriteString(s.graph)
+			sb.WriteString(" { \n\t")
 		}
-		sb.WriteString(s.target + "\n\t")
+		sb.WriteString(s.target)
+		sb.WriteString("\n\t")
 		sb.WriteString(strings.Join(s.body, "\n\t"))
 		if s.graph != "" {
 			sb.WriteString("\n\t} \n\t")
 		}
 	} else {
 		if s.graph != "" {
-			sb.WriteString(" GRAPH " + s.graph + " { \n\t")
-			sb.WriteString(s.target + "\n\t")
+			sb.WriteString(" GRAPH ")
+			sb.WriteString(s.graph)
+			sb.WriteString(" { \n\t")
+			sb.WriteString(s.target)
+			sb.WriteString("\n\t")
 			if len(s.body) > 0 {
 				sb.WriteString(strings.Join(s.body, "\n\t"))
 			}
 			sb.WriteString("\n\t} \n\t")
 		} else {
-			sb.WriteString(s.target + "\n\t")
+			sb.WriteString(s.target)
+			sb.WriteString("\n\t")
 			sb.WriteString(strings.Join(s.body, "\n\t"))
 		}
 		for _, c := range s.subqueries {
 			if s.graph != "" {
-				sb.WriteString(" GRAPH " + s.graph + " ")
+				sb.WriteString(" GRAPH ")
+				sb.WriteString(s.graph)
+				sb.WriteString(" ")
 			}
 			sb.WriteString(c.ProduceBody())
 		}
@@ -213,7 +236,11 @@ func (s SparqlQueryFlat) StringPrefix(attachPrefix bool) string {
 
 	if attachPrefix {
 		for k, v := range prefixes {
-			sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+			sb.WriteString("PREFIX ")
+			sb.WriteString(k)
+			sb.WriteString(" <")
+			sb.WriteString(v)
+			sb.WriteString(">\n")
 		}
 	}
 
@@ -223,7 +250,9 @@ func (s SparqlQueryFlat) StringPrefix(attachPrefix bool) string {
 	sb.WriteString(s.head)
 	sb.WriteString(" { \n\t")
 	if attachPrefix && s.graph != "" { // only attach if query used stand-alone
-		sb.WriteString(" GRAPH " + s.graph + " { \n\t")
+		sb.WriteString(" GRAPH ")
+		sb.WriteString(s.graph)
+		sb.WriteString(" { \n\t")
 	}
 	sb.WriteString(strings.Join(s.body, "\n\t"))
 

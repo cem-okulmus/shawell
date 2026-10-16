@@ -553,35 +553,43 @@ func (n *NodeShape) StringTab(a int, insideProperty bool, debug bool) string {
 	sb.WriteString(tab)
 
 	for i := range n.valuetypes {
-		sb.WriteString(n.valuetypes[i].String() + tab)
+		sb.WriteString(n.valuetypes[i].String())
+		sb.WriteString(tab)
 	}
 	for i := range n.valueranges {
-		sb.WriteString(n.valueranges[i].String() + tab)
+		sb.WriteString(n.valueranges[i].String())
+		sb.WriteString(tab)
 	}
 	for i := range n.stringconts {
-		sb.WriteString(n.stringconts[i].String() + tab)
+		sb.WriteString(n.stringconts[i].String())
+		sb.WriteString(tab)
 	}
 	for i := range n.propairconts {
-		sb.WriteString(n.propairconts[i].String() + tab)
+		sb.WriteString(n.propairconts[i].String())
+		sb.WriteString(tab)
 	}
 
 	if len(n.ands.shapes) > 0 {
-		sb.WriteString(n.ands.String() + tab)
+		sb.WriteString(n.ands.String())
+		sb.WriteString(tab)
 	}
 
 	for i := range n.nots {
-		sb.WriteString(n.nots[i].String() + tab)
+		sb.WriteString(n.nots[i].String())
+		sb.WriteString(tab)
 	}
 
 	if len(n.ors) > 0 {
 		for i := range n.ors {
-			sb.WriteString(n.ors[i].String() + tab)
+			sb.WriteString(n.ors[i].String())
+			sb.WriteString(tab)
 		}
 	}
 
 	if len(n.xones) > 0 {
 		for i := range n.xones {
-			sb.WriteString(n.xones[i].String() + tab)
+			sb.WriteString(n.xones[i].String())
+			sb.WriteString(tab)
 		}
 	}
 
@@ -623,7 +631,8 @@ func (n *NodeShape) StringTab(a int, insideProperty bool, debug bool) string {
 
 	// OTHER constraints
 	for i := range n.others {
-		sb.WriteString(n.others[i].String() + tab)
+		sb.WriteString(n.others[i].String())
+		sb.WriteString(tab)
 	}
 
 	// and the rest ...
@@ -1118,7 +1127,9 @@ func (p *PropertyShape) StringTab(a int, insideNode bool, debug bool) string {
 		}
 	}
 	sb.WriteString(tab)
-	sb.WriteString(_sh + "path " + p.path.PropertyString())
+	sb.WriteString(_sh)
+	sb.WriteString("path ")
+	sb.WriteString(p.path.PropertyString())
 	if p.minCount != 0 {
 		sb.WriteString(fmt.Sprint(" [ min: ", p.minCount))
 
