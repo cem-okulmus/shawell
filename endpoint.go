@@ -154,7 +154,11 @@ func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string, additive boo
 	var sb strings.Builder
 
 	for k, v := range prefixes {
-		sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+		sb.WriteString("PREFIX ")
+		sb.WriteString(k)
+		sb.WriteString(" <")
+		sb.WriteString(v)
+		sb.WriteString(">\n")
 	}
 
 	sb.WriteString("INSERT  DATA { \n")
@@ -192,7 +196,11 @@ func (s *SparqlEndpoint) Delete(input *rdf.Graph, fromGraph string) (out error) 
 	var sb strings.Builder
 
 	for k, v := range prefixes {
-		sb.WriteString("PREFIX " + k + " <" + v + ">\n")
+		sb.WriteString("PREFIX ")
+		sb.WriteString(k)
+		sb.WriteString(" <")
+		sb.WriteString(v)
+		sb.WriteString(">\n")
 	}
 
 	sb.WriteString("DELETE DATA { \n")

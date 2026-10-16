@@ -182,10 +182,21 @@ func (v ValidationReport) String() string {
 	_xsd := prefixes["xsd:"] // continuing to live dangerously
 
 	if v.testName != nil {
-		sb.WriteString(v.testName.String() + " \n")
-		sb.WriteString("\t<" + _rdf + "type> <" + _sht + "Validate> ;\n")
-		sb.WriteString("\t<" + _rdfs + "label> " + v.label.String() + " ;\n")
-		sb.WriteString("\t<" + _mf + "action> [\n")
+		sb.WriteString(v.testName.String())
+		sb.WriteString(" \n")
+		sb.WriteString("\t<")
+		sb.WriteString(_rdf)
+		sb.WriteString("type> <")
+		sb.WriteString(_sht)
+		sb.WriteString("Validate> ;\n")
+		sb.WriteString("\t<")
+		sb.WriteString(_rdfs)
+		sb.WriteString("label> ")
+		sb.WriteString(v.label.String())
+		sb.WriteString(" ;\n")
+		sb.WriteString("\t<")
+		sb.WriteString(_mf)
+		sb.WriteString("action> [\n")
 
 		var dg string
 		var sg string
@@ -202,19 +213,38 @@ func (v ValidationReport) String() string {
 			sg = v.shapesGraph.String()
 		}
 
-		sb.WriteString("\t\t<" + _sht + "dataGraph> " + dg + " ;\n")
-		sb.WriteString("\t\t<" + _sht + "shapesGraph> " + sg + " ;\n")
+		sb.WriteString("\t\t<")
+		sb.WriteString(_sht)
+		sb.WriteString("dataGraph> ")
+		sb.WriteString(dg)
+		sb.WriteString(" ;\n")
+		sb.WriteString("\t\t<")
+		sb.WriteString(_sht)
+		sb.WriteString("shapesGraph> ")
+		sb.WriteString(sg)
+		sb.WriteString(" ;\n")
 		sb.WriteString("\t] ;\n")
 
-		sb.WriteString("\t<" + _mf + "result> [ \n")
+		sb.WriteString("\t<")
+		sb.WriteString(_mf)
+		sb.WriteString("result> [ \n")
 	} else {
 		sb.WriteString("[ \n")
 	}
 
-	sb.WriteString("\t\t<" + _rdf + "type> <" + _sh + "ValidationReport" + "> ;\n")
+	sb.WriteString("\t\t<")
+	sb.WriteString(_rdf)
+	sb.WriteString("type> <")
+	sb.WriteString(_sh)
+	sb.WriteString("ValidationReport")
+	sb.WriteString("> ;\n")
 
 	resTerm := rdf2go.NewLiteralWithDatatype(fmt.Sprint(v.conforms), rdf2go.NewResource(_xsd+"boolean"))
-	sb.WriteString("\t\t<" + _sh + "conforms> " + resTerm.String() + " ;\n")
+	sb.WriteString("\t\t<")
+	sb.WriteString(_sh)
+	sb.WriteString("conforms> ")
+	sb.WriteString(resTerm.String())
+	sb.WriteString(" ;\n")
 
 	for i := range v.results {
 		sb.WriteString(v.results[i].String())
@@ -264,9 +294,15 @@ func (vr ValidationResult) StringComp() string {
 func (vr ValidationResult) StringGeneric(comparison bool) string {
 	var sb strings.Builder
 
-	sb.WriteString("\t\t<" + _sh + "result> [\n")
+	sb.WriteString("\t\t<")
+	sb.WriteString(_sh)
+	sb.WriteString("result> [\n")
 
-	sb.WriteString("\t\t\t<" + _rdf + "type> <" + _sh + "ValidationResult> ;\n")
+	sb.WriteString("\t\t\t<")
+	sb.WriteString(_rdf)
+	sb.WriteString("type> <")
+	sb.WriteString(_sh)
+	sb.WriteString("ValidationResult> ;\n")
 
 	switch vrType := vr.focusNode.(type) {
 	case *rdf2go.Literal:
@@ -308,7 +344,11 @@ func (vr ValidationResult) StringGeneric(comparison bool) string {
 	}
 
 	for _, v := range vr.message {
-		sb.WriteString("\t\t\t<" + _sh + "resultMessage> " + v.String() + " ;\n")
+		sb.WriteString("\t\t\t<")
+		sb.WriteString(_sh)
+		sb.WriteString("resultMessage> ")
+		sb.WriteString(v.String())
+		sb.WriteString(" ;\n")
 	}
 
 	if comparison && vr.otherValue != nil {
@@ -323,9 +363,17 @@ func (vr ValidationResult) StringGeneric(comparison bool) string {
 	// }
 
 	if vr.severity == nil {
-		sb.WriteString("\t\t\t<" + _sh + "resultSeverity> <" + _sh + "Violation> ;\n")
+		sb.WriteString("\t\t\t<")
+		sb.WriteString(_sh)
+		sb.WriteString("resultSeverity> <")
+		sb.WriteString(_sh)
+		sb.WriteString("Violation> ;\n")
 	} else {
-		sb.WriteString("\t\t\t<" + _sh + "resultSeverity> " + vr.severity.String() + " ;\n")
+		sb.WriteString("\t\t\t<")
+		sb.WriteString(_sh)
+		sb.WriteString("resultSeverity> ")
+		sb.WriteString(vr.severity.String())
+		sb.WriteString(" ;\n")
 	}
 	sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "sourceConstraintComponent> ", vr.sourceConstraintComponent, "; \n"))
 	sb.WriteString(fmt.Sprint("\t\t\t<", _sh, "sourceShape> ", vr.sourceShape, "; \n"))
