@@ -2883,7 +2883,8 @@ func (s *ShaclDocument) GetPropertyShape(graph *rdf.Graph, term rdf.Term) (*Prop
 	}
 
 	var out PropertyShape
-	out.maxCount = -1 // using this as the default
+	out.universalOnly = true // set to true by default
+	out.maxCount = -1        // using this as the default
 
 	triples := graph.All(term, nil, nil)
 	foundPath := false
@@ -2921,8 +2922,6 @@ func (s *ShaclDocument) GetPropertyShape(graph *rdf.Graph, term rdf.Term) (*Prop
 		return nil, err2
 	}
 	out.id = out.shape.id
-
-	out.universalOnly = true // set to true by default
 
 	// for i := range out.shape.deps { // all shape dependencies of property shapes are, by def., external
 	// 	out.shape.deps[i].external = true
