@@ -3369,7 +3369,7 @@ func (s *ShaclDocument) GetNodeShape(graph *rdf.Graph, term rdf.Term, insideProp
 				doc:  s,
 			}},
 			origin:   qualName,
-			external: false,
+			external: isExternal,
 			mode:     property,
 			max:      -1,
 			path:     viaPath,

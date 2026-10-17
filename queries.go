@@ -19,7 +19,7 @@ func (p *PropertyShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out 
 	tmp.IRI = p.shape.IRI
 	tmp.properties = append(tmp.properties, p)
 
-	return tmp.ToSparql(fromGraph, target)
+	return tmp.ToSparqlFull(fromGraph, target, true)
 }
 
 // ToSubquery embeds a property shape into a node shape's SPARQL query via a subquery.
@@ -93,11 +93,16 @@ func (p *PropertyShape) ToSubquery(num int) (head []string, body string, subquer
 	return head, body, subquery
 }
 
-// ToSparql generates a SPARQL query that retrieves nodes satisfying the given shape constraints and optional properties.
-// Used to compute conditional answers.
-// Constructs SELECT with qualified variable names, WHERE clause with all constraint conditions,
-// GROUP BY clauses for aggregation, and optional GRAPH clause for named graphs.
-func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out SparqlQuery) {
+// ToSparql generates the conditional query of a node shape. Nested property shapes are
+// left out, since they are checked separately on the focus node (as internal deps).
+func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) SparqlQuery {
+	return n.ToSparqlFull(fromGraph, target, false)
+}
+
+// ToSparqlFull generates the conditional query of a node shape; with includeNested,
+// nested property shapes also get their value column (needed by property shapes for
+// their external deps).
+func (n *NodeShape) ToSparqlFull(fromGraph string, target SparqlQueryFlat, includeNested bool) (out SparqlQuery) {
 	var head []string // variables and renamings appearing inside the SELECT statement
 	var body []string // statements that form the inside of the WHERE clause
 	// var group []string
@@ -138,7 +143,7 @@ func (n *NodeShape) ToSparql(fromGraph string, target SparqlQueryFlat) (out Spar
 	}
 
 	for i, p := range n.properties {
-		if p.Nested() {
+		if p.Nested() && !includeNested {
 			continue // don't produce a subquery for a nested query, as those are internal deps
 		}
 

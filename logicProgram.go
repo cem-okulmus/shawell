@@ -374,29 +374,19 @@ var (
 	orVar   = 1
 )
 
-// TODO expandRules needs to be heavily rewritten.
-// It creates a set of rules that together ensure
-// that a given shape name can be derived. The current
-// code is super convoluted and prone to failure (and kind of impressive it even works)
-// What is needed: a way to systemically modify and "split" rules
-
 // expandRules generates logic program rules for handling SHACL constraints.
-// It creates rules that encode cardinality constraints, disjointness, and other logical conditions.
-func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, header, element string) (out []serialisedRule) {
-	// valuesSlice := strings.Split(strings.ToLower(values.RawValue()), " ")
+// It creates rules that encode the logical conditions.
+func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, header, element string) []serialisedRule {
 
-	// for i := range valuesSlice {
-	// 	valuesSlice[i] = "\"" + valuesSlice[i] + "\""
-	// }
+	// the single core rule that can assign shape "header" to element
+	coreRule := serialisedRule{head: fmt.Sprint(header, "(", element, ")")}
 
-	head := fmt.Sprint(header, "(", element, ")")
-
-	var externalRules []serialisedRule // these are needed in qualifiedShape and XONE, and don't directly
-	// concern the general rule for this shape and element
+	// these are needed for or, xone and qualifiedShape
+	var externalRules []serialisedRule
 
 	for _, i := range indices {
 		switch deps[i].mode {
-		case and, node: // should be ok?
+		case and, node, property: // should be ok?
 			var body []string
 
 			for _, ref := range deps[i].name {
@@ -405,16 +395,8 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				}
 			}
 
-			if len(out) == 0 {
-				out = append(out, serialisedRule{head: head, body: body})
-			} else {
-				for j := range out {
-					if len(out[j].body) == 0 {
-						continue // don't attach stuff to facts
-					}
-					out[j].body = append(out[j].body, body...) // attach the ands to all prior rules
-				}
-			}
+			coreRule.body = append(coreRule.body, body...)
+
 		case or:
 			var bodyOr []string
 
@@ -432,21 +414,12 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				}
 			}
 
-			if len(out) == 0 {
-				out = append(out, serialisedRule{head: head, body: bodyOr})
-			} else {
-			here:
-				for j := range out {
-					if len(out[j].body) == 0 {
-						continue here // don't attach stuff to facts
-					}
-					out[j].body = append(out[j].body, bodyOr...) // attach the orRules to all prior rules
-				}
-			}
+			coreRule.body = append(coreRule.body, bodyOr...)
 
 			// adding the value-specific or rules
 			externalRules = append(externalRules, orRules...)
 
+			orVar++
 		case not:
 			ref := deps[i].name[0].GetLogName() // not has only singular reference (in current design)
 
@@ -455,16 +428,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				body = append(body, fmt.Sprint("not ", ref, "(", rewrite(v), ")"))
 			}
 
-			if len(out) == 0 {
-				out = append(out, serialisedRule{head: head, body: body})
-			} else {
-				for j := range out {
-					if len(out[j].body) == 0 {
-						continue // don't attach stuff to facts
-					}
-					out[j].body = append(out[j].body, body...) // attach negated values to prior rules
-				}
-			}
+			coreRule.body = append(coreRule.body, body...)
 
 		case xone: // will require some simple combinatorics
 
@@ -478,13 +442,16 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			headXONEgeneric := fmt.Sprint("XONE_TERM_", xoneVar, "( VAR )")
 
+			// Produce all valid combinations, to satisfy XONE,
+			// where all the refs are negated, except one,
+			// hence "exactly one" is true
 			for k := range refs {
 				var body []string
 
 				for j := range refs {
 					var presPos string
 
-					if j == k {
+					if j != k {
 						presPos = " not "
 					}
 					body = append(body, fmt.Sprint(presPos, refs[j], "( VAR )"))
@@ -509,17 +476,8 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				specificXONErule.body = append(specificXONErule.body, fmt.Sprint("XONE_TERM_", xoneVar, "( ", rewrite(valuesSlice[v]), " )"))
 			}
 
-			// attach the XONE shape predicate to all prior rules
-			if len(out) == 0 {
-				out = append(out, serialisedRule{head: head, body: []string{specificXONErule.head}})
-			} else {
-				for j := range out {
-					if len(out[j].body) == 0 {
-						continue // don't attach stuff to facts
-					}
-					out[j].body = append(out[j].body, specificXONErule.head) // attach xone shape to all  prior rules
-				}
-			}
+			// attach the XONE shape predicate to core rule
+			coreRule.body = append(coreRule.body, specificXONErule.head)
 
 			// add XONE rules to the pile of external rules
 			externalRules = append(externalRules, boundRules...)
@@ -546,177 +504,117 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			mark := fmt.Sprint("Qual", qual)
 			atLeast := fmt.Sprint("AtLeast", qual)
+			qualHead := fmt.Sprint(mark, "Head(", element, ")")
+
 			qual++
 
-			qualHead := fmt.Sprint(mark, "Head(", element, ")")
-			if len(out) == 0 {
-				out = append(out, serialisedRule{head: head, body: []string{qualHead}})
-			} else {
-				for j := range out {
-					if len(out[j].body) == 0 {
-						continue // don't attach stuff to facts
-					}
-
-					out[j].body = append(out[j].body, qualHead) // attach qualfified to rule
-				}
-			}
-
-			// var tmp string
-			// if deps[i].max != -1 {
-			// 	tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min, ", K <= ", deps[i].max)
-			// } else {
-			// 	tmp = fmt.Sprint("count", mark, "Max(K), K >=", deps[i].min)
-			// }
-
-			// var tmp string
-			// if deps[i].max != -1 {
-			// 	tmp = fmt.Sprint("#count{ A  : ", mark, "(A), ", ref, "(A)  } = X, X >= ", deps[i].min, ", X <= ", deps[i].max)
-			// } else {
-			// 	tmp = fmt.Sprint("#count{ A  : ", mark, "(A), ", ref, "(A)  } >= ", deps[i].min)
-			// }
-
-			var tmp string
-
-			minVal := deps[i].min
-			maxVal := deps[i].max
-
-			if deps[i].min != 0 {
-				if deps[i].max != -1 {
-					tmp = fmt.Sprint(atLeast, "Un(", minVal, "), not ", atLeast, "Un(", maxVal+1, ")")
-				} else {
-					tmp = fmt.Sprint(atLeast, "Un(", minVal, ")")
-				}
-			} else {
-				if deps[i].max != -1 {
-					tmp = fmt.Sprint("not ", atLeast, "Un(", maxVal+1, ")")
-				} else {
-					tmp = "" // empty since trivially satisfied
-				}
-			}
-
-			qualifiedRule := serialisedRule{
-				head: qualHead,
-				body: strings.Split(tmp, ", "),
-			}
-
-			if tmp == "" { // make rule body empty when the tmp body is just ""
-				qualifiedRule.body = nil
-			}
-
-			// tmp = fmt.Sprint("count", mark, "(X,K), not -count", mark, "Max(K)")
-			// countMax1 := rule{
-			// 	head: fmt.Sprint("count", mark, "Max(K)"),
-			// 	body: strings.Split(tmp, ", "),
-			// }
-
-			// tmp = fmt.Sprint("count", mark, "(X,K), count", mark, "(Y,K+1)")
-			// countMax2 := rule{
-			// 	head: fmt.Sprint("-count", mark, "Max(K)"),
-			// 	body: strings.Split(tmp, ", "),
-			// }
-
-			// tmp = fmt.Sprint("count", mark, "(Y,K-1), ", mark, "(X), ", ref,
-			// 	"(X), Y < X, not -count", mark, "(X,K)")
-			// countStep1 := rule{
-			// 	head: fmt.Sprint("count", mark, "(X,K)"),
-			// 	body: strings.Split(tmp, ", "),
-			// }
-
-			// tmp = fmt.Sprint("count", mark, "(Y,K-1), ", mark, "(X), ", ref,
-			// 	"(X), Y < X, ", mark, "(Z), ", ref, "(Z), Y < Z, Z < X")
-			// countStep2 := rule{
-			// 	head: fmt.Sprint("-count", mark, "(X,K)"),
-			// 	body: strings.Split(tmp, ", "),
-			// }
-
-			// tmp = fmt.Sprint(mark, "(X), ", ref, "(X), not -count", mark, "(X,1)")
-			// countBase1 := rule{
-			// 	head: fmt.Sprint("count", mark, "(X,1)"),
-			// 	body: strings.Split(tmp, ", "),
-			// }
-			// tmp = fmt.Sprint(mark, "(X), ", ref, "(X), ", mark, "(Y), ", ref, "(Y), X > Y")
-			// countBase2 := rule{
-			// 	head: fmt.Sprint("-count", mark, "(X,1)"),
-			// 	body: strings.Split(tmp, ", "),
-			// }
-
-			// rules := []rule{countBase1, countBase2, countStep1, countStep2, countMax1, countMax2, qualifiedRule}
-
-			externalRules = append(externalRules, qualifiedRule)
-			// attach facts to values to mark for counting
-			for i, v := range valuesSlice {
-				v1 := rewrite(v)
-				if i == 0 {
-					externalRules = append(externalRules,
-						serialisedRule{head: fmt.Sprint(mark, "(", 0, ", ", v1, ")")})
-					if i != len(valuesSlice)-1 {
-						// #nosec G602 -- guarded by i != len-1
-						v2 := rewrite(valuesSlice[i+1])
-						externalRules = append(externalRules, serialisedRule{
-							head: fmt.Sprint(mark, "(", v1, ", ", v2, ")"),
-						})
-					}
-
-				} else if i == len(valuesSlice)-1 {
-					externalRules = append(externalRules, serialisedRule{
-						head: fmt.Sprint(mark, "(", v1, ", ", 1, ")"),
-					})
-				} else {
-					v2 := rewrite(valuesSlice[i+1]) //gosec:disable G602 -- else-branch: i < len-1
-					externalRules = append(externalRules, serialisedRule{
-						head: fmt.Sprint(mark, "(", v1, ", ", v2, ")"),
-					})
-				}
-			}
-
-			// AtLeastRules
-			externalRules = append(externalRules, serialisedRule{
-				head: fmt.Sprint(atLeast, "(X,0)"),
-				body: []string{fmt.Sprint(mark, "(0,X)")},
-			})
-			bodyBase1 := []string{
-				fmt.Sprint(mark, "(0,X) "),
-				fmt.Sprint(ref, "(X)"),
-			}
-			for _, sib := range siblingRefs {
-				bodyBase1 = append(bodyBase1, fmt.Sprint("not ", sib, "(X)"))
-			}
-			externalRules = append(externalRules, serialisedRule{
-				head: fmt.Sprint(atLeast, "(X,1)"),
-				body: bodyBase1,
-			})
-			externalRules = append(externalRules, serialisedRule{
-				head: fmt.Sprint(atLeast, "(Y,Z)"),
-				body: []string{
-					fmt.Sprint(mark, "(X,Y) "),
-					fmt.Sprint(atLeast, "(X,Z)"),
-				},
-			})
-			bodyStep := []string{
-				fmt.Sprint(mark, "(X,Y) "),
-				fmt.Sprint(atLeast, "(X,Z)"),
-				fmt.Sprint(ref, "(Y)"),
-			}
-			for _, sib := range siblingRefs {
-				bodyStep = append(bodyStep, fmt.Sprint("not ", sib, "(Y)"))
-			}
-			externalRules = append(externalRules, serialisedRule{
-				head: fmt.Sprint(atLeast, "(Y,Z+1)"),
-				body: bodyStep,
-			})
-
-			externalRules = append(externalRules, serialisedRule{
-				head: fmt.Sprint(atLeast, "Un(Y)"),
-				body: []string{
-					fmt.Sprint(atLeast, "(X,Y)"),
-				},
-			})
+			// attach to core rule
+			coreRule.body = append(coreRule.body, qualHead)
+			// attach the counting rules
+			externalRules = append(externalRules,
+				addCountingRules(deps[i].min, deps[i].max, mark, atLeast, qualHead, ref, valuesSlice, siblingRefs)...)
 
 		}
 	}
 
-	// only now add the external rules
-	out = append(out, externalRules...)
+	return append(externalRules, coreRule)
+}
+
+func addCountingRules(minVal, maxVal int, mark, atLeast, qualHead, ref string, valuesSlice []rdf.Term, siblingRefs []string) (out []serialisedRule) {
+	var tmp string
+
+	if minVal != 0 {
+		if maxVal != -1 {
+			tmp = fmt.Sprint(atLeast, "Un(", minVal, "), not ", atLeast, "Un(", maxVal+1, ")")
+		} else {
+			tmp = fmt.Sprint(atLeast, "Un(", minVal, ")")
+		}
+	} else {
+		if maxVal != -1 {
+			tmp = fmt.Sprint("not ", atLeast, "Un(", maxVal+1, ")")
+		} else {
+			tmp = "" // empty since trivially satisfied
+		}
+	}
+
+	qualifiedRule := serialisedRule{
+		head: qualHead,
+		body: strings.Split(tmp, ", "),
+	}
+
+	if tmp == "" { // make rule body empty when the tmp body is just ""
+		qualifiedRule.body = nil
+	}
+
+	out = append(out, qualifiedRule)
+	// attach facts to values to mark for counting
+	for i, v := range valuesSlice {
+		v1 := rewrite(v)
+		if i == 0 {
+			out = append(out,
+				serialisedRule{head: fmt.Sprint(mark, "(", 0, ", ", v1, ")")})
+			if i != len(valuesSlice)-1 {
+				// #nosec G602 -- guarded by i != len-1
+				v2 := rewrite(valuesSlice[i+1])
+				out = append(out, serialisedRule{
+					head: fmt.Sprint(mark, "(", v1, ", ", v2, ")"),
+				})
+			}
+
+		} else if i == len(valuesSlice)-1 {
+			out = append(out, serialisedRule{
+				head: fmt.Sprint(mark, "(", v1, ", ", 1, ")"),
+			})
+		} else {
+			v2 := rewrite(valuesSlice[i+1]) //gosec:disable G602 -- else-branch: i < len-1
+			out = append(out, serialisedRule{
+				head: fmt.Sprint(mark, "(", v1, ", ", v2, ")"),
+			})
+		}
+	}
+
+	// AtLeastRules
+	out = append(out, serialisedRule{
+		head: fmt.Sprint(atLeast, "(X,0)"),
+		body: []string{fmt.Sprint(mark, "(0,X)")},
+	})
+	bodyBase1 := []string{
+		fmt.Sprint(mark, "(0,X) "),
+		fmt.Sprint(ref, "(X)"),
+	}
+	for _, sib := range siblingRefs {
+		bodyBase1 = append(bodyBase1, fmt.Sprint("not ", sib, "(X)"))
+	}
+	out = append(out, serialisedRule{
+		head: fmt.Sprint(atLeast, "(X,1)"),
+		body: bodyBase1,
+	})
+	out = append(out, serialisedRule{
+		head: fmt.Sprint(atLeast, "(Y,Z)"),
+		body: []string{
+			fmt.Sprint(mark, "(X,Y) "),
+			fmt.Sprint(atLeast, "(X,Z)"),
+		},
+	})
+	bodyStep := []string{
+		fmt.Sprint(mark, "(X,Y) "),
+		fmt.Sprint(atLeast, "(X,Z)"),
+		fmt.Sprint(ref, "(Y)"),
+	}
+	for _, sib := range siblingRefs {
+		bodyStep = append(bodyStep, fmt.Sprint("not ", sib, "(Y)"))
+	}
+	out = append(out, serialisedRule{
+		head: fmt.Sprint(atLeast, "(Y,Z+1)"),
+		body: bodyStep,
+	})
+
+	out = append(out, serialisedRule{
+		head: fmt.Sprint(atLeast, "Un(Y)"),
+		body: []string{
+			fmt.Sprint(atLeast, "(X,Y)"),
+		},
+	})
 
 	return out
 }
