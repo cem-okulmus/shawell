@@ -7,6 +7,11 @@ shawell
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+
+#ignore artefacts and example files
+artefacts/
+demo_examples/
+
 # ignore project files
 *.sublime-workspace
 *.sublime-project
