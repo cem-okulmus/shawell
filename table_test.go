@@ -106,7 +106,7 @@ func groupedTestTable() *GroupedTable[rdf.Term] {
 			{res("c"), Unbound{}, Unbound{}},
 		},
 	}
-	return GetGroupedTable[rdf.Term](simple)
+	return GetGroupedTable(simple)
 }
 
 func termNames(terms []rdf.Term) string {
@@ -207,10 +207,10 @@ func TestGroupedTableAddIndex(t *testing.T) {
 // TestGroupedTableMergeKeepsGrouping checks that a merged grouped table is grouped over all of its
 // rows: IterTargets and GetGroupOfTarget read the grouping, not the rows.
 func TestGroupedTableMergeKeepsGrouping(t *testing.T) {
-	left := GetGroupedTable[rdf.Term](&TableSimple[rdf.Term]{
+	left := GetGroupedTable(&TableSimple[rdf.Term]{
 		header: []string{"S", "P"}, content: [][]rdf.Term{{res("a"), res("x")}},
 	})
-	right := GetGroupedTable[rdf.Term](&TableSimple[rdf.Term]{
+	right := GetGroupedTable(&TableSimple[rdf.Term]{
 		header: []string{"S", "P"}, content: [][]rdf.Term{{res("b"), res("y")}, {res("a"), res("z")}},
 	})
 	if err := left.Merge(right); err != nil {
@@ -223,7 +223,7 @@ func TestGroupedTableMergeKeepsGrouping(t *testing.T) {
 		t.Errorf("group of a after Merge is %s, expected [x z]", got)
 	}
 
-	mismatched := GetGroupedTable[rdf.Term](&TableSimple[rdf.Term]{header: []string{"S", "Q"}})
+	mismatched := GetGroupedTable(&TableSimple[rdf.Term]{header: []string{"S", "Q"}})
 	if err := left.Merge(mismatched); err == nil {
 		t.Errorf("Merge accepted a table with a different header")
 	}
@@ -238,7 +238,7 @@ func TestTableAccessors(t *testing.T) {
 		header:  []string{"S", "P"},
 		content: [][]rdf.Term{{res("a"), res("x")}, {res("b"), res("y")}},
 	}
-	grouped := GetGroupedTable[rdf.Term](simple)
+	grouped := GetGroupedTable(simple)
 
 	for name, table := range map[string]Table[rdf.Term]{"simple": simple, "grouped": grouped} {
 		col, err := table.GetColumn(1)

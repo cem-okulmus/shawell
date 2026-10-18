@@ -9,11 +9,11 @@ require (
 	github.com/fatih/color v1.15.0
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/knakk/digest v0.0.0-20160404164910-fd45becddc49
-	github.com/knakk/rdf v0.0.0-20190304171630-8521bf4c5042
 )
 
 require (
 	github.com/cem-okulmus/gon3-1 v0.2.3 // indirect
+	github.com/knakk/rdf v0.0.0-20190304171630-8521bf4c5042 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.17 // indirect
 	golang.org/x/sys v0.21.0 // indirect
