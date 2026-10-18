@@ -2,14 +2,15 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
 // Tests for recursive documents. Shawell evaluates them with the well-founded semantics, through the
-// logic program: shape membership that is only supported by a positive cycle is false, membership
-// that depends on its own negation is undefined, and an undefined membership is not a violation
-// (see InvalidTargetLP). Each case lists the expected invalid targets per shape, and also checks
-// that the validation report agrees with the verdict.
+// logic program: shape membership that is only supported by a positive cycle is false, and membership
+// that depends on its own negation is undefined. A target conforms only if its membership is true, so
+// an undefined membership is a violation, like a false one (see InvalidTargetLP). Each case lists the
+// expected invalid targets per shape, and also checks that the validation report agrees with the verdict.
 
 const recPrefixes = `
 @prefix sh: <http://www.w3.org/ns/shacl#> .
@@ -117,19 +118,19 @@ func TestRecursiveShapes(t *testing.T) {
 		{
 			name:    "self-negation-is-undefined",
 			turtle:  `ex:S a sh:NodeShape ; sh:targetNode ex:n0 ; sh:not ex:S .`,
-			invalid: "",
+			invalid: "S={n0}", // undefined, hence a violation
 		},
 		{
 			name: "negation-through-a-property-cycle",
 			turtle: `ex:S a sh:NodeShape ; sh:targetNode ex:n0 ; sh:property [ sh:path ex:p ; sh:not ex:S ] .
 			         ex:n0 ex:p ex:n0 .`,
-			invalid: "",
+			invalid: "S={n0}", // undefined
 		},
 		{
 			name: "even-negative-cycle",
 			turtle: `ex:S1 a sh:NodeShape ; sh:targetNode ex:n0 ; sh:not ex:S2 .
 			         ex:S2 a sh:NodeShape ; sh:targetNode ex:n0 ; sh:not ex:S1 .`,
-			invalid: "",
+			invalid: "S1={n0} S2={n0}", // both undefined
 		},
 		{
 			name: "negation-of-a-stratified-recursive-shape",
@@ -247,6 +248,99 @@ ex:n0 ex:p ex:n1 .
 				}
 				for _, p := range checkReport(report, c.invalid == "") {
 					t.Errorf("forceLP=%v report: %s", forceLP, p)
+				}
+			}
+		})
+	}
+}
+
+// TestUndefinedMembershipInReports covers known bug V: under the well-founded semantics, the membership
+// of a target can be undefined (here through cycles with sh:not). A target conforms only if its
+// membership is true, so an undefined one is a violation, and the validation report has to say so too:
+// each constraint must count as violated unless it is definitely satisfied, both for constraints that
+// require a node to be in a shape (sh:node, sh:and, sh:or, sh:xone, sh:qualifiedMinCount) and for those
+// that require it not to be (sh:not, sh:qualifiedMaxCount). The first cases are the inputs of the sheval
+// tests (the "Common Foundations for Recursive Shape Languages" suite) that crashed; the others reach
+// an undefined membership through each kind of shape reference. All memberships here are undefined.
+func TestUndefinedMembershipInReports(t *testing.T) {
+	ep := startTestOxigraph(t)
+
+	cases := []struct{ name, turtle, invalid string }{
+		{"sheval-cons1", `ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+		    sh:property [ sh:path ex:p ; sh:qualifiedMinCount 1 ; sh:qualifiedValueShape ex:S1 ] .
+		  ex:S1 a sh:NodeShape ; sh:not ex:S ; sh:targetNode ex:a .
+		  ex:a ex:p ex:a .`, "S1={a} S={a}"},
+		{"sheval-cons2", `ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+		    sh:property [ sh:path ex:p ; sh:qualifiedMinCount 1 ; sh:qualifiedValueShape ex:S1 ] .
+		  ex:S1 a sh:NodeShape ; sh:not ex:S ; sh:targetNode ex:a, ex:b .
+		  ex:a ex:p ex:b . ex:b ex:p ex:a .`, "S1={a,b} S={a,b}"},
+		{"sheval-nstrat2", `ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+		    sh:property [ sh:path ex:p ; sh:qualifiedMinCount 1 ; sh:qualifiedValueShape [ sh:not [ sh:node ex:S ] ] ] .
+		  ex:a ex:p ex:b . ex:b ex:p ex:a .`, "S={a,b}"},
+		{"sheval-example4", `ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+		    sh:property [ sh:path ex:p ; sh:qualifiedMinCount 1 ; sh:qualifiedValueShape [ sh:not [ sh:node ex:S ] ] ] .
+		  ex:a ex:p ex:b . ex:b ex:p ex:a ; ex:q "d" .`, "S={a,b}"},
+		{"node", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:node ex:T . ex:T a sh:NodeShape ; sh:not ex:S .`, "S={a}"},
+		{"and", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:and ( ex:T ) . ex:T a sh:NodeShape ; sh:not ex:S .`, "S={a}"},
+		{"or", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:or ( ex:T ) . ex:T a sh:NodeShape ; sh:not ex:S .`, "S={a}"},
+		{"xone", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:xone ( ex:T ) . ex:T a sh:NodeShape ; sh:not ex:S .`, "S={a}"},
+		{"node-in-property", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:node ex:T ] .
+		  ex:T a sh:NodeShape ; sh:not ex:S . ex:a ex:p ex:a .`, "S={a}"},
+		{"qualified-min", `ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+		    sh:property [ sh:path ex:p ; sh:qualifiedValueShape ex:T ; sh:qualifiedMinCount 1 ] .
+		  ex:T a sh:NodeShape ; sh:not ex:S . ex:a ex:p ex:a .`, "S={a}"},
+		// S(a) holds iff T(a) does not, and T(a) iff S(a) does not: an even cycle through negation
+		{"qualified-max", `ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+		    sh:property [ sh:path ex:p ; sh:qualifiedValueShape ex:T ; sh:qualifiedMinCount 0 ; sh:qualifiedMaxCount 0 ] .
+		  ex:T a sh:NodeShape ; sh:not ex:S . ex:a ex:p ex:a .`, "S={a}"},
+		{"not", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:not ex:S .`, "S={a}"},
+		{"not-in-property", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:not ex:S ] .
+		  ex:a ex:p ex:a .`, "S={a}"},
+		// xone with an undefined and a false shape: exactly one shape must be definitely true
+		{"xone-with-a-false-shape", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:xone ( ex:T ex:F ) .
+		  ex:T a sh:NodeShape ; sh:not ex:S . ex:F a sh:NodeShape ; sh:class ex:Missing .`, "S={a}"},
+		// xone with an undefined and a true shape: the undefined one might be true too
+		{"xone-with-a-true-shape", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:xone ( ex:T ex:Any ) .
+		  ex:T a sh:NodeShape ; sh:not ex:S . ex:Any a sh:NodeShape .`, "S={a}"},
+		{"xone-with-a-true-shape-in-property", `ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+		    sh:property [ sh:path ex:p ; sh:xone ( ex:T ex:Any ) ] .
+		  ex:T a sh:NodeShape ; sh:not ex:S . ex:Any a sh:NodeShape . ex:a ex:p ex:a .`, "S={a}"},
+		// or with an undefined and a true shape: the true one decides
+		{"or-with-a-true-shape", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:or ( ex:T ex:Any ) ; sh:not ex:N .
+		  ex:T a sh:NodeShape ; sh:not ex:S . ex:Any a sh:NodeShape . ex:N a sh:NodeShape ; sh:class ex:Missing .`, ""},
+	}
+
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			graphName := fmt.Sprintf("<urn:undefined-membership:%d>", i)
+			g := loadTurtle(t, ep, graphName, recPrefixes+c.turtle)
+
+			res, invalid, err := shawellInvalid(g, ep, graphName, false)
+			if err != nil {
+				t.Fatalf("panic: %v", err)
+			}
+			if got := describeInvalid(invalid); got != c.invalid || res != (c.invalid == "") {
+				t.Errorf("verdict %v with invalid targets %q, expected %q", res, got, c.invalid)
+			}
+
+			report, err := shawellReport(g, ep, graphName, false)
+			if err != nil {
+				t.Fatalf("report: panic: %v", err)
+			}
+			for _, p := range checkReport(report, c.invalid == "") {
+				t.Errorf("report: %s", p)
+			}
+
+			// every invalid target must have a result in the report
+			reported := map[string]bool{}
+			for _, r := range report.results {
+				reported[strings.TrimPrefix(r.focusNode.RawValue(), fzNS)] = true
+			}
+			for _, nodes := range invalid {
+				for n := range nodes {
+					if !reported[n] {
+						t.Errorf("invalid target %s has no result in the report", n)
+					}
 				}
 			}
 		})

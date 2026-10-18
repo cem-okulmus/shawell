@@ -278,7 +278,7 @@ and:
 			if s.debug {
 				fmt.Println("Cheking if target is of shape ", n.ands.shapes[k].name)
 			}
-			if !s.NodeIsShape(targetNode, n.ands.shapes[k].name) {
+			if s.NodeMembership(targetNode, n.ands.shapes[k].name) != isIn {
 				report := ValidationResult{
 					focusNode:                 targetNode,
 					pathName:                  nil,
@@ -311,7 +311,7 @@ or:
 
 			for j := range currOr.shapes {
 				// fmt.Println("Cheking if target is of shape ", currOr.shapes[j].name)
-				if s.NodeIsShape(targetNode, currOr.shapes[j].name) {
+				if s.NodeMembership(targetNode, currOr.shapes[j].name) == isIn {
 					satisfyAtLeastOne = true
 					break // skip early if one is already satisfied
 					// fmt.Println("TargetNode ", targetNode, " has shape ", currOr.shapes[j].name)
@@ -344,7 +344,7 @@ not:
 	for row := range neededTable.IterRows() {
 		targetNode := row[0]
 		for k := range n.nots {
-			if s.NodeIsShape(targetNode, n.nots[k].shape.name) {
+			if s.NodeMembership(targetNode, n.nots[k].shape.name) != isOut {
 				report := ValidationResult{
 					focusNode:                 targetNode,
 					pathName:                  nil,
@@ -372,19 +372,23 @@ xone:
 		for k := range n.xones {
 			currXone := n.xones[k]
 
-			numSatisfied := 0
+			numSatisfied, numUndefined := 0, 0
 
 			for j := range currXone.shapes {
-				if s.NodeIsShape(targetNode, currXone.shapes[j].name) {
+				switch s.NodeMembership(targetNode, currXone.shapes[j].name) {
+				case isIn:
 					numSatisfied++
+				case isUndefined:
+					numUndefined++
 				}
 
-				if numSatisfied > 1 {
-					break
-				}
+				// if numSatisfied > 1 || numUndefined > 0 {
+				// 	break
+				// }
+
 			}
 
-			if numSatisfied != 1 {
+			if numSatisfied != 1 || numUndefined > 0 {
 				report := ValidationResult{
 					focusNode:                 targetNode,
 					pathName:                  nil,
@@ -410,7 +414,7 @@ node:
 	for row := range neededTable.IterRows() {
 		targetNode := row[0]
 		for k := range n.nodes {
-			if !s.NodeIsShape(targetNode, n.nodes[k].name) {
+			if s.NodeMembership(targetNode, n.nodes[k].name) != isIn {
 
 				report := ValidationResult{
 					focusNode:                 targetNode,
@@ -845,7 +849,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 				if s.debug {
 					fmt.Println("For the value ", v, " checking if it is shape ", p.shape.ands.shapes[k].ref.GetQualName())
 				}
-				if !s.NodeIsShape(v, p.shape.ands.shapes[k].name) {
+				if s.NodeMembership(v, p.shape.ands.shapes[k].name) != isIn {
 					report := ValidationResult{
 						focusNode:                 target,
 						pathName:                  p.path,
@@ -888,7 +892,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 					if s.debug {
 						fmt.Println("Cheking if,", v, " , is of shape ", currOr.shapes[j].name)
 					}
-					if s.NodeIsShape(v, currOr.shapes[j].name) {
+					if s.NodeMembership(v, currOr.shapes[j].name) == isIn {
 						satisfyAtLeastOne = true
 					}
 				}
@@ -920,7 +924,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 			values := neededTable.GetGroupOfTarget(target, 1)
 
 			for _, v := range values {
-				if s.NodeIsShape(v, p.shape.nots[k].shape.name) {
+				if s.NodeMembership(v, p.shape.nots[k].shape.name) != isOut {
 					report := ValidationResult{
 						focusNode:                 target,
 						pathName:                  p.path,
@@ -950,18 +954,22 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 			for k := range p.shape.xones {
 				currXone := p.shape.xones[k]
 
-				numSatisfied := 0
+				in, undefined := 0, 0
+
 				for j := range currXone.shapes {
-					if s.NodeIsShape(v, currXone.shapes[j].name) {
-						numSatisfied++
+					switch s.NodeMembership(v, currXone.shapes[j].name) {
+					case isIn:
+						in++
+					case isUndefined:
+						undefined++
 					}
 
-					if numSatisfied > 1 {
-						break
-					}
+					// if isIn > 1 || undefined > 0 {
+					// 	break
+					// }
 				}
 
-				if numSatisfied != 1 {
+				if isIn != 1 || undefined > 0 {
 					report := ValidationResult{
 						focusNode:                 target,
 						pathName:                  p.path,
@@ -989,7 +997,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 
 			// fmt.Println("In ", p.GetLogName(), "Lengh of vlues", len(values), "targert", target, "at shape", p.shape.nodes[k].name, " some", someCount)
 			for _, v := range values {
-				if !s.NodeIsShape(v, p.shape.nodes[k].name) {
+				if s.NodeMembership(v, p.shape.nodes[k].name) != isIn {
 					report := ValidationResult{
 						focusNode:                 target,
 						pathName:                  p.path,
@@ -1015,8 +1023,6 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 			currQS := p.shape.qualifiedShapes[k]
 			values := neededTable.GetGroupOfTarget(target, 1)
 
-			numSatisfied := 0
-
 			var siblingsNames []string
 
 			if parent != "" {
@@ -1038,22 +1044,50 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 				}
 			}
 
+			in, possible := 0, 0
 		outer:
 			for _, v := range values {
-				if s.NodeIsShape(v, currQS.shape.name) {
-					if currQS.disjoint { // for disjoint QSConstraints, first check if not a sibling value
-						for _, sib := range siblingsNames {
-							if s.NodeIsShape(v, sib) {
-								continue outer // don't count any value that satisfies
-							}
+				m := s.NodeMembership(v, currQS.shape.name)
+				if m == isOut {
+					continue outer
+				}
+
+				inSibling, maybeSibling := false, false
+
+				if currQS.disjoint {
+					for _, sib := range siblingsNames {
+						switch s.NodeMembership(v, sib) {
+						case isIn:
+							inSibling = true
+						case isUndefined:
+							maybeSibling = true
 						}
 					}
-
-					numSatisfied++
 				}
+
+				if inSibling {
+					continue // certainly excluded by a sibling
+				}
+
+				possible++
+				if m == isIn && !maybeSibling {
+					in++
+				}
+
+				// if s.NodeMembership(v, currQS.shape.name) == isIn {
+				// 	if currQS.disjoint { // for disjoint QSConstraints, first check if not a sibling value
+				// 		for _, sib := range siblingsNames {
+				// 			if s.NodeMembership(v, sib) == isIn {
+				// 				continue outer // don't count any value that satisfies
+				// 			}
+				// 		}
+				// 	}
+
+				// 	numSatisfied++
+				// }
 			}
 
-			if currQS.max != -1 && numSatisfied > currQS.max {
+			if currQS.max != -1 && possible > currQS.max {
 				report := ValidationResult{
 					focusNode:                 target,
 					pathName:                  p.path,
@@ -1067,7 +1101,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 				reports = append(reports, report)
 			}
 
-			if numSatisfied < currQS.min {
+			if in < currQS.min {
 
 				report := ValidationResult{
 					focusNode:                 target,

@@ -843,6 +843,30 @@ func (s *ShaclDocument) IsRecursive() bool {
 	return false
 }
 
+type membership int
+
+const (
+	isIn membership = iota
+	isOut
+	isUndefined
+)
+
+// NodeMembership returns whether a node is in a shape, not in it, or (for recursive documents under
+// the well-founded semantics) undefined.
+func (s *ShaclDocument) NodeMembership(node rdf.Term, shape string) membership {
+	if s.NodeIsShape(node, shape) {
+		return isIn
+	}
+	if undefined, ok := s.undefinedAnswers[shape]; ok {
+		for row := range undefined.IterRows() {
+			if row[0].RawValue() == node.RawValue() {
+				return isUndefined
+			}
+		}
+	}
+	return isOut
+}
+
 // NodeIsShape checks if a given node has a given shape, or not
 func (s *ShaclDocument) NodeIsShape(node rdf.Term, shape string) bool {
 	if !s.answered {
@@ -1197,7 +1221,7 @@ func (s *ShaclDocument) InvalidTargetLP(shape string, ep endpoint) Table[rdf.Ter
 		nodesWithShape = &TableSimple[rdf.Term]{}
 	}
 
-	undefinedNodes, _ := s.undefinedAnswers[shape]
+	// undefinedNodes, _ := s.undefinedAnswers[shape]
 
 	out.header = append(out.header, "Not "+shapeObj.GetIRI())
 
@@ -1212,13 +1236,13 @@ outer:
 			}
 		}
 
-		if undefinedNodes != nil {
-			for nRow := range undefinedNodes.IterRows() {
-				if nRow[0].RawValue() == tRow[0].RawValue() {
-					continue outer // undefined membership is not a violation
-				}
-			}
-		}
+		// if undefinedNodes != nil {
+		// 	for nRow := range undefinedNodes.IterRows() {
+		// 		if nRow[0].RawValue() == tRow[0].RawValue() {
+		// 			continue outer // undefined membership is not a violation
+		// 		}
+		// 	}
+		// }
 
 		out.content = append(out.content, []rdf.Term{tRow[0]})
 	}
