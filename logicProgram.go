@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -338,9 +339,10 @@ func (p serialisedProgram) String() string {
 
 	for _, r := range p.rules {
 		if len(r.body) > 0 { // rule
-			sb.WriteString(fmt.Sprint(r.head, " :- ", strings.Join(r.body, ", "), ".\n"))
+			body := slices.Compact(slices.Sorted(slices.Values(r.body))) // a sorted copy, without duplicates
+			fmt.Fprint(&sb, r.head, " :- ", strings.Join(body, ", "), ".\n")
 		} else { // fact
-			sb.WriteString(fmt.Sprint(r.head, ". \n"))
+			fmt.Fprint(&sb, r.head, ". \n")
 		}
 	}
 

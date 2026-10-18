@@ -691,3 +691,334 @@ ex:alice ex:pet ex:rex .
 		}
 	}
 }
+
+// The logical constraint tests share two shapes: SA accepts a and ab, SB accepts b and ab, and no
+// shape accepts c.
+const logicalShapes = `
+ex:SA a sh:NodeShape ; sh:in ( ex:a ex:ab ) .
+ex:SB a sh:NodeShape ; sh:in ( ex:b ex:ab ) .
+`
+
+type invalidTargetsCase struct {
+	name    string
+	turtle  string
+	invalid string // as printed by describeInvalid
+}
+
+// checkInvalidTargets validates each case, together with logicalShapes, on both the unwinding and
+// the logic program path, and compares the invalid targets and the verdict.
+func checkInvalidTargets(t *testing.T, graphPrefix string, cases []invalidTargetsCase) {
+	ep := startTestOxigraph(t)
+
+	for i, c := range cases {
+		for _, forceLP := range []bool{false, true} {
+			path := map[bool]string{false: "unwinding", true: "logic-program"}[forceLP]
+			t.Run(c.name+"/"+path, func(t *testing.T) {
+				graphName := fmt.Sprintf("<urn:%s:%d>", graphPrefix, i)
+				g := loadTurtle(t, ep, graphName, recPrefixes+logicalShapes+c.turtle)
+
+				res, invalid, err := shawellInvalid(g, ep, graphName, forceLP)
+				if err != nil {
+					t.Fatalf("panic: %v", err)
+				}
+				if got := describeInvalid(invalid); got != c.invalid {
+					t.Errorf("invalid targets %q, expected %q", got, c.invalid)
+				}
+				if res != (c.invalid == "") {
+					t.Errorf("verdict %v, expected %v", res, c.invalid == "")
+				}
+			})
+		}
+	}
+}
+
+// TestXone checks that sh:xone requires each value node to conform to exactly one of the listed
+// shapes (known bug J: the unwinding path accepted value nodes that conform to none of them).
+func TestXone(t *testing.T) {
+	checkInvalidTargets(t, "xone", []invalidTargetsCase{
+		{
+			name:    "node-shape",
+			turtle:  `ex:S a sh:NodeShape ; sh:targetNode ex:a , ex:b , ex:ab , ex:c ; sh:xone ( ex:SA ex:SB ) .`,
+			invalid: "S={ab,c}",
+		},
+		{
+			name:    "single-shape-matching-none",
+			turtle:  `ex:S a sh:NodeShape ; sh:targetNode ex:a , ex:c ; sh:xone ( ex:SA ) .`,
+			invalid: "S={c}",
+		},
+		{
+			// n0 has one value per shape, n1 has a value matching no shape, n2 one matching both
+			name: "property-shape",
+			turtle: `ex:S a sh:NodeShape ; sh:targetNode ex:n0 , ex:n1 , ex:n2 ;
+			           sh:property [ sh:path ex:p ; sh:xone ( ex:SA ex:SB ) ] .
+			         ex:n0 ex:p ex:a , ex:b . ex:n1 ex:p ex:a , ex:c . ex:n2 ex:p ex:a , ex:ab .`,
+			invalid: "S={n1,n2}",
+		},
+	})
+}
+
+// TestAnd checks that sh:and requires each value node to conform to all of the listed shapes (known
+// bug K: from the second shape on, the unwinding path read an ungrouped table and dropped every target).
+func TestAnd(t *testing.T) {
+	checkInvalidTargets(t, "and", []invalidTargetsCase{
+		{
+			name:    "node-shape",
+			turtle:  `ex:S a sh:NodeShape ; sh:targetNode ex:a , ex:b , ex:ab , ex:c ; sh:and ( ex:SA ex:SB ) .`,
+			invalid: "S={a,b,c}",
+		},
+		{
+			name:    "single-shape",
+			turtle:  `ex:S a sh:NodeShape ; sh:targetNode ex:a , ex:c ; sh:and ( ex:SA ) .`,
+			invalid: "S={c}",
+		},
+		{
+			name:    "repeated-shape",
+			turtle:  `ex:S a sh:NodeShape ; sh:targetNode ex:a , ex:c ; sh:and ( ex:SA ex:SA ) .`,
+			invalid: "S={c}",
+		},
+		{
+			name:    "three-shapes",
+			turtle:  `ex:S a sh:NodeShape ; sh:targetNode ex:a , ex:ab ; sh:and ( ex:SA ex:SB ex:SA ) .`,
+			invalid: "S={a}",
+		},
+		{
+			// n0 has only values matching both shapes, n1 also one matching only SA, n2 one matching none
+			name: "property-shape",
+			turtle: `ex:S a sh:NodeShape ; sh:targetNode ex:n0 , ex:n1 , ex:n2 ;
+			           sh:property [ sh:path ex:p ; sh:and ( ex:SA ex:SB ) ] .
+			         ex:n0 ex:p ex:ab . ex:n1 ex:p ex:ab , ex:a . ex:n2 ex:p ex:ab , ex:c .`,
+			invalid: "S={n1,n2}",
+		},
+	})
+}
+
+// TestLanguageIn checks sh:languageIn on property and node shapes, including the validation report
+// (known bug N: on property shapes the satisfying condition was inside FILTER NOT EXISTS, so matching
+// values failed and others passed, and non-literal values were never flagged).
+func TestLanguageIn(t *testing.T) {
+	ep := startTestOxigraph(t)
+
+	cases := []invalidTargetsCase{
+		{
+			// n0 has an English value, n1 a German one, n2 one without a tag, n3 an IRI, n4 no value
+			name: "property-shape-single-language",
+			turtle: `ex:S a sh:NodeShape ; sh:targetNode ex:n0 , ex:n1 , ex:n2 , ex:n3 , ex:n4 ;
+			           sh:property [ sh:path ex:p ; sh:languageIn ( "en" ) ] .
+			         ex:n0 ex:p "hello"@en . ex:n1 ex:p "hallo"@de . ex:n2 ex:p "hello" . ex:n3 ex:p ex:a .`,
+			invalid: "S={n1,n2,n3}",
+		},
+		{
+			// a value only has to match one of the languages; n2 has one matching and one not
+			name: "property-shape-two-languages",
+			turtle: `ex:S a sh:NodeShape ; sh:targetNode ex:n0 , ex:n1 , ex:n2 , ex:n3 ;
+			           sh:property [ sh:path ex:p ; sh:languageIn ( "en" "de" ) ] .
+			         ex:n0 ex:p "hello"@en , "hallo"@de . ex:n1 ex:p "hello"@en-GB .
+			         ex:n2 ex:p "hello"@en , "bonjour"@fr . ex:n3 ex:p ex:a .`,
+			invalid: "S={n2,n3}",
+		},
+		{
+			name: "node-shape",
+			turtle: `ex:S a sh:NodeShape ; sh:targetNode "hello"@en , "hallo"@de , "bonjour"@fr , ex:a ;
+			           sh:languageIn ( "en" "de" ) .`,
+			invalid: "S={a,bonjour}",
+		},
+	}
+
+	for i, c := range cases {
+		for _, forceLP := range []bool{false, true} {
+			path := map[bool]string{false: "unwinding", true: "logic-program"}[forceLP]
+			t.Run(c.name+"/"+path, func(t *testing.T) {
+				graphName := fmt.Sprintf("<urn:languageIn:%d>", i)
+				g := loadTurtle(t, ep, graphName, recPrefixes+c.turtle)
+
+				res, invalid, err := shawellInvalid(g, ep, graphName, forceLP)
+				if err != nil {
+					t.Fatalf("panic: %v", err)
+				}
+				if got := describeInvalid(invalid); got != c.invalid {
+					t.Errorf("invalid targets %q, expected %q", got, c.invalid)
+				}
+				if res != (c.invalid == "") {
+					t.Errorf("verdict %v, expected %v", res, c.invalid == "")
+				}
+
+				report, err := shawellReport(g, ep, graphName, forceLP)
+				if err != nil {
+					t.Fatalf("report: panic: %v", err)
+				}
+				for _, p := range checkReport(report, c.invalid == "") {
+					t.Error("report: " + p)
+				}
+			})
+		}
+	}
+}
+
+// TestDatatype checks sh:datatype on property and node shapes, including the validation report.
+// The documents do not declare xsd:, and datatypes are written as full IRIs (known bug M: the report
+// query used the prefixed name xsd:string, which made the query invalid without that prefix). IRIs
+// and blank nodes must violate the constraint (known bug O: for non-core datatypes, datatype() of a
+// non-literal raised an error, so such values were never flagged; the report query for xsd:string on
+// property shapes had the same problem).
+func TestDatatype(t *testing.T) {
+	ep := startTestOxigraph(t)
+
+	const xsd = "<http://www.w3.org/2001/XMLSchema#"
+	cases := []struct {
+		invalidTargetsCase
+		focusNodes string // focus nodes of the report results, sorted
+	}{
+		{
+			// non-core datatype; n0 has a language-tagged value, n1 a plain one, n2 an IRI, n3 a blank node
+			invalidTargetsCase: invalidTargetsCase{
+				name: "property-shape-non-core",
+				turtle: `ex:S a sh:NodeShape ; sh:targetNode ex:n0 , ex:n1 , ex:n2 , ex:n3 , ex:n4 ;
+				           sh:property [ sh:path ex:p ; sh:datatype rdf:langString ] .
+				         ex:n0 ex:p "hello"@en . ex:n1 ex:p "hello" . ex:n2 ex:p ex:a . ex:n3 ex:p [ ex:q ex:a ] .`,
+				invalid: "S={n1,n2,n3}",
+			},
+			focusNodes: "n1,n2,n3",
+		},
+		{
+			invalidTargetsCase: invalidTargetsCase{
+				name: "node-shape-non-core",
+				turtle: `ex:S a sh:NodeShape ; sh:targetNode "hello"@en , "plain" , ex:a ;
+				           sh:datatype rdf:langString .`,
+				invalid: "S={a,plain}",
+			},
+			focusNodes: "a,plain",
+		},
+		{
+			invalidTargetsCase: invalidTargetsCase{
+				name: "property-shape-string",
+				turtle: `ex:S a sh:NodeShape ; sh:targetNode ex:n0 , ex:n1 , ex:n2 , ex:n3 , ex:n4 ;
+				           sh:property [ sh:path ex:p ; sh:datatype ` + xsd + `string> ] .
+				         ex:n0 ex:p "s" . ex:n1 ex:p 1 . ex:n2 ex:p ex:a . ex:n3 ex:p [ ex:q ex:a ] .`,
+				invalid: "S={n1,n2,n3}",
+			},
+			focusNodes: "n1,n2,n3",
+		},
+		{
+			invalidTargetsCase: invalidTargetsCase{
+				name: "node-shape-string",
+				turtle: `ex:S a sh:NodeShape ; sh:targetNode "s" , 1 , ex:a ;
+				           sh:datatype ` + xsd + `string> .`,
+				invalid: "S={1,a}",
+			},
+			focusNodes: "1,a",
+		},
+		{
+			// core datatype other than xsd:string; the report query compares with xsd:string (bug M)
+			invalidTargetsCase: invalidTargetsCase{
+				name: "property-shape-integer",
+				turtle: `ex:S a sh:NodeShape ; sh:targetNode ex:n0 , ex:n1 , ex:n2 , ex:n3 , ex:n4 ;
+				           sh:property [ sh:path ex:p ; sh:datatype ` + xsd + `integer> ] .
+				         ex:n0 ex:p 1 . ex:n1 ex:p "x" . ex:n2 ex:p ex:a . ex:n3 ex:p [ ex:q ex:a ] .`,
+				invalid: "S={n1,n2,n3}",
+			},
+			focusNodes: "n1,n2,n3",
+		},
+		{
+			invalidTargetsCase: invalidTargetsCase{
+				name: "node-shape-integer",
+				turtle: `ex:S a sh:NodeShape ; sh:targetNode 1 , "x" , ex:a ;
+				           sh:datatype ` + xsd + `integer> .`,
+				invalid: "S={a,x}",
+			},
+			focusNodes: "a,x",
+		},
+	}
+
+	for i, c := range cases {
+		for _, forceLP := range []bool{false, true} {
+			path := map[bool]string{false: "unwinding", true: "logic-program"}[forceLP]
+			t.Run(c.name+"/"+path, func(t *testing.T) {
+				graphName := fmt.Sprintf("<urn:datatype:%d>", i)
+				g := loadTurtle(t, ep, graphName, recPrefixes+c.turtle)
+
+				res, invalid, err := shawellInvalid(g, ep, graphName, forceLP)
+				if err != nil {
+					t.Fatalf("panic: %v", err)
+				}
+				if got := describeInvalid(invalid); got != c.invalid {
+					t.Errorf("invalid targets %q, expected %q", got, c.invalid)
+				}
+				if res != (c.invalid == "") {
+					t.Errorf("verdict %v, expected %v", res, c.invalid == "")
+				}
+
+				report, err := shawellReport(g, ep, graphName, forceLP)
+				if err != nil {
+					t.Fatalf("report: panic: %v", err)
+				}
+				for _, p := range checkReport(report, c.invalid == "") {
+					t.Error("report: " + p)
+				}
+				var focus []string
+				for _, r := range report.results {
+					focus = append(focus, strings.TrimPrefix(r.focusNode.RawValue(), fzNS))
+				}
+				sort.Strings(focus)
+				if got := strings.Join(focus, ","); got != c.focusNodes {
+					t.Errorf("report: focus nodes %q, expected %q", got, c.focusNodes)
+				}
+			})
+		}
+	}
+}
+
+// TestSerialiseDropsDuplicateLiterals covers known bug L: DLV 2.1.1 crashes on a rule that repeats a
+// negated literal if the program also has a rule over an undefined predicate. String() must drop the
+// duplicate, without changing the program, so that serialising it again gives the same output.
+func TestSerialiseDropsDuplicateLiterals(t *testing.T) {
+	p := serialisedProgram{rules: []serialisedRule{
+		{head: "a(x)", body: []string{"not b(x)", "c(x)", "not b(x)"}},
+		{head: "c(Y)", body: []string{"d(X,Y)"}}, // d is undefined
+		{head: "e(x)"},
+	}}
+	bodyBefore := strings.Join(p.rules[0].body, "|")
+
+	first := p.String()
+	if strings.Count(first, "not b(x)") != 1 {
+		t.Errorf("the duplicate literal was not dropped:\n%s", first)
+	}
+	if second := p.String(); second != first {
+		t.Errorf("serialising twice gives different programs:\n%s\nand\n%s", first, second)
+	}
+	if got := strings.Join(p.rules[0].body, "|"); got != bodyBefore {
+		t.Errorf("String() changed the rule body from %q to %q", bodyBefore, got)
+	}
+
+	if _, err := os.Stat(dlv); err != nil {
+		t.Skipf("DLV binary not found at %s", dlv)
+	}
+	if err := noPanic(func() { p.runDLV(false, false) }); err != nil {
+		t.Errorf("DLV failed on the serialised program: %v\n%s", err, first)
+	}
+}
+
+// TestRepeatedNegation is the SHACL side of bug L: a shape that negates the same shape twice, which
+// produces a rule with a repeated negated literal. No node conforms to S2, so its predicate is
+// undefined in the logic program, while the rules for the qualified value shape still use it: the
+// combination that crashed DLV.
+func TestRepeatedNegation(t *testing.T) {
+	ep := startTestOxigraph(t)
+	turtle := recPrefixes + `
+ex:S1 a sh:NodeShape ; sh:targetNode ex:n0, ex:n1 ; sh:not ex:S2 ; sh:not ex:S2 ;
+  sh:property [ sh:path ex:p ; sh:qualifiedValueShape ex:S2 ; sh:qualifiedMinCount 0 ; sh:qualifiedMaxCount 1 ] .
+ex:S2 a sh:NodeShape ; sh:class ex:A .
+ex:n0 ex:p ex:n1 .
+ex:n1 ex:p ex:n2 .
+`
+	graphName := "<urn:repeated-negation>"
+	g := loadTurtle(t, ep, graphName, turtle)
+	for _, forceLP := range []bool{false, true} {
+		res, invalid, err := shawellInvalid(g, ep, graphName, forceLP)
+		if err != nil {
+			t.Fatalf("forceLP=%v: panic: %v", forceLP, err)
+		}
+		if got := describeInvalid(invalid); got != "" || !res {
+			t.Errorf("forceLP=%v: verdict %v with invalid targets %q, expected true", forceLP, res, got)
+		}
+	}
+}

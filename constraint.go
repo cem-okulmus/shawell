@@ -750,7 +750,7 @@ func (v ValueTypeConstraint) SparqlBody(obj string, path PropertyPath) (out stri
 			}
 		} else {
 			if path != nil {
-				inner := "FILTER ( datatype( " + uniqObj + ") != " + v.term.String() + " ) ."
+				inner := "FILTER ( !isLiteral(" + uniqObj + ") || datatype( " + uniqObj + ") != " + v.term.String() + " ) ."
 				// inner := fmt.Sprint("FILTER ( ", v.term.String(), "(str(", uniqObj, ")) != ", obj, " ) .")
 
 				out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
@@ -829,9 +829,9 @@ func (v ValueTypeConstraint) SparqlBodyValidation(obj string, path PropertyPath)
 			if path != nil {
 				var inner string
 				if v.term.RawValue() == _xsd+"string" {
-					inner = "FILTER ( datatype( " + uniqObj + ") != " + v.term.String() + " ) ."
+					inner = "FILTER ( !isLiteral(" + uniqObj + ") || datatype( " + uniqObj + ") != " + v.term.String() + " ) ."
 				} else {
-					b4b4 := fmt.Sprint("( (datatype(", uniqObj, ") != xsd:string ) && (datatype(", uniqObj, ") != ", v.term.String(), " )) ||")
+					b4b4 := fmt.Sprint("( (datatype(", uniqObj, ") != <http://www.w3.org/2001/XMLSchema#string> ) && (datatype(", uniqObj, ") != ", v.term.String(), " )) ||")
 					b4 := fmt.Sprint("BIND (", v.term.String(), "(str(", uniqObj, ")) AS ?OfType", v.id, " ).\n")
 
 					// inner := "FILTER ( datatype( " + uniqObj + ") != " + v.term.RawValue() + " ) ."
@@ -843,7 +843,7 @@ func (v ValueTypeConstraint) SparqlBodyValidation(obj string, path PropertyPath)
 				if v.term.RawValue() == _xsd+"string" {
 					out = "FILTER ( !isLiteral(" + obj + ") ||  datatype( " + obj + ") != " + v.term.String() + " ) ."
 				} else {
-					b4b4 := fmt.Sprint("( (datatype(", obj, ") != xsd:string ) && (datatype(", obj, ") != ", v.term.String(), " )) ||")
+					b4b4 := fmt.Sprint("( (datatype(", obj, ") != <http://www.w3.org/2001/XMLSchema#string> ) && (datatype(", obj, ") != ", v.term.String(), " )) ||")
 					b4 := fmt.Sprint("BIND (", v.term.String(), "(str(", obj, ")) AS ?OfType", v.id, " ).\n")
 					out = b4 + fmt.Sprint("FILTER ( ", b4b4, " !BOUND(?OfType", v.id, ")).")
 				}
@@ -1299,7 +1299,8 @@ func (v StringBasedConstraint) SparqlBody(obj string, path PropertyPath) (out st
 			for i := range v.langs {
 				langChecks = append(langChecks, fmt.Sprint("langMatches(lang(", uniqObj, "),", v.langs[i], ")"))
 			}
-			inner := fmt.Sprint("FILTER (  ", strings.Join(langChecks, " || "), " ) .")
+			// a value violates the constraint if it is not a literal or matches none of the languages
+			inner := fmt.Sprint("FILTER ( !isLiteral(", uniqObj, ") || !( ", strings.Join(langChecks, " || "), " ) ) .")
 			out = fmt.Sprint("FILTER NOT EXISTS { ?sub ", path.PropertyString(), " ", uniqObj, " . ", inner, "}")
 		} else { // Node Shape
 
@@ -2098,11 +2099,10 @@ func GetTableForLogicalConstraints(ep endpoint, path PropertyPath, propertyName 
 
 			// fmt.Println("Table before merge ", tmp)
 			if out == nil {
-				out = tmp
-			} else {
-				err := out.Merge(tmp)
-				check(err)
+				out = &TableSimple[rdf.Term]{header: tmp.GetHeader()} // a fresh table, so that merging does not change the cache
 			}
+			err := out.Merge(tmp)
+			check(err)
 
 			// fmt.Println("Table after merge ", out)
 		}
@@ -2126,12 +2126,14 @@ func GetTableForLogicalConstraints(ep endpoint, path PropertyPath, propertyName 
 				tmp = ep.Query(checkQuery)
 				targetCache[checkQuery.String()] = tmp
 			}
+
 			if out == nil {
-				out = tmp
-			} else {
-				err := out.Merge(tmp)
-				check(err)
+				out = &TableSimple[rdf.Term]{header: tmp.GetHeader()} // a fresh table, so that merging does not change the cache
 			}
+
+			err := out.Merge(tmp)
+			check(err)
+
 		}
 	}
 
@@ -2679,7 +2681,7 @@ type InversePath struct {
 }
 
 func (i InversePath) PropertyString() string {
-	return "^" + i.path.PropertyString()
+	return "^(" + i.path.PropertyString() + ")"
 }
 
 func (i InversePath) PropertyRDF() string {
@@ -2695,7 +2697,7 @@ func (s SequencePath) PropertyString() string {
 	for i := range s.paths {
 		out = append(out, s.paths[i].PropertyString())
 	}
-	return strings.Join(out, "/")
+	return "(" + strings.Join(out, "/") + ")"
 }
 
 func (s SequencePath) PropertyRDF() string {
@@ -2715,7 +2717,7 @@ func (a AlternativePath) PropertyString() string {
 	for i := range a.paths {
 		out = append(out, a.paths[i].PropertyString())
 	}
-	return strings.Join(out, "|")
+	return "(" + strings.Join(out, "|") + ")"
 }
 
 func (a AlternativePath) PropertyRDF() string {
@@ -2735,7 +2737,7 @@ func (z ZerOrMorePath) PropertyRDF() string {
 }
 
 func (z ZerOrMorePath) PropertyString() string {
-	return z.path.PropertyRDF() + "*"
+	return "(" + z.path.PropertyString() + ")*"
 }
 
 type OneOrMorePath struct {
@@ -2743,11 +2745,11 @@ type OneOrMorePath struct {
 }
 
 func (o OneOrMorePath) PropertyString() string {
-	return o.path.PropertyString() + "+"
+	return "(" + o.path.PropertyString() + ")+"
 }
 
 func (o OneOrMorePath) PropertyRDF() string {
-	return fmt.Sprint("[ <", _sh, "oneoOrMorePath> ", o.path.PropertyRDF(), " ]")
+	return fmt.Sprint("[ <", _sh, "oneOrMorePath> ", o.path.PropertyRDF(), " ]")
 }
 
 type ZerOrOnePath struct {
@@ -2755,7 +2757,7 @@ type ZerOrOnePath struct {
 }
 
 func (o ZerOrOnePath) PropertyString() string {
-	return o.path.PropertyString() + "?"
+	return "(" + o.path.PropertyString() + ")?"
 }
 
 func (o ZerOrOnePath) PropertyRDF() string {
@@ -2853,6 +2855,8 @@ func ExtractPropertyPath(graph *rdf.Graph, initTerm rdf.Term) (out PropertyPath,
 			}
 
 			out = SequencePath{paths: paths}
+		default: // unknown path predicate, return error
+			return out, errors.New("unknown path predicate " + triple.Predicate.RawValue() + " found.")
 
 		}
 	default: // we are in the simple path case
@@ -2957,6 +2961,15 @@ type TargetExpression interface {
 	Target()
 }
 
+// new TargetAny type, needed for proper propagation of indirect targets
+type TargetAny struct{}
+
+func (t TargetAny) String() string {
+	return "Any Target"
+}
+
+func (t TargetAny) Target() {}
+
 type TargetIndirect struct {
 	indirection *PropertyPath
 	actual      TargetExpression
@@ -2968,6 +2981,8 @@ func (t TargetIndirect) Target() {}
 func (t TargetIndirect) String() string {
 	var out string
 	switch t.actual.(type) {
+	case TargetAny:
+		out = "(Any Target)"
 	case TargetSubjectOf:
 		out = "(TargetSubjectOf) "
 	case TargetObjectsOf:
@@ -3048,6 +3063,8 @@ func ExtractTargetExpression(triple *rdf.Triple) (out TargetExpression, err erro
 func GetTargetTerm(t TargetExpression) string {
 	var queryBody string
 	switch t := t.(type) {
+	case TargetAny:
+		return "" // seems to simple
 	case TargetIndirect:
 		var after string
 		if t.indirection != nil {

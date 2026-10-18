@@ -123,6 +123,35 @@ func GetSubjectFromTriples(triples []*rdf.Triple) (subjects []rdf.Term) {
 	return subjects
 }
 
+// GetShapeObjects returns the objects of the given triples that can be shapes, i.e. all but literals.
+func GetShapeObjects(triples []*rdf.Triple) (objects []rdf.Term) {
+	for i := range triples {
+		if _, isLiteral := triples[i].Object.(*rdf.Literal); !isLiteral {
+			objects = append(objects, triples[i].Object)
+		}
+	}
+	return objects
+}
+
+// GetListMembers returns the members of an RDF list that can be shapes, i.e. all but literals.
+func GetListMembers(graph *rdf.Graph, list rdf.Term) (members []rdf.Term) {
+	visited := make(map[string]bool) // guards against malformed, cyclic lists
+	for list != nil && list.RawValue() != _rdf+"nil" && !visited[list.String()] {
+		visited[list.String()] = true
+		if first := graph.One(list, rdf.NewResource(_rdf+"first"), nil); first != nil {
+			if _, isLiteral := first.Object.(*rdf.Literal); !isLiteral {
+				members = append(members, first.Object)
+			}
+		}
+		rest := graph.One(list, rdf.NewResource(_rdf+"rest"), nil)
+		if rest == nil {
+			break
+		}
+		list = rest.Object
+	}
+	return members
+}
+
 // GetNodeTerms returns all terms that appear in the SHACL document as the subject of a triple
 // appearing inside a SHACL node shape.
 func GetNodeTerms(graph *rdf.Graph) []rdf.Term {
@@ -160,6 +189,17 @@ func GetNodeTerms(graph *rdf.Graph) []rdf.Term {
 	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"severity"), nil))...)
 	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"message"), nil))...)
 	out = append(out, GetSubjectFromTriples(graph.All(nil, rdf.NewResource(_sh+"deactivated"), nil))...)
+
+	// shapes that only appear as the value of a shape-referencing constraint, e.g. sh:node ex:S where ex:S
+	// has no triples of its own, are shapes as well (without constraints)
+	for _, p := range []string{"node", "not", "qualifiedValueShape"} {
+		out = append(out, GetShapeObjects(graph.All(nil, rdf.NewResource(_sh+p), nil))...)
+	}
+	for _, p := range []string{"and", "or", "xone"} {
+		for _, t := range graph.All(nil, rdf.NewResource(_sh+p), nil) {
+			out = append(out, GetListMembers(graph, t.Object)...)
+		}
+	}
 
 	out = removeDuplicate(out)
 
@@ -233,25 +273,80 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool) (out Sh
 		_, out.depMap[name] = out.TransitiveClosure(name)
 	}
 
-	// attach indirect Targets (hope this pointer stuff works)
-	for k, v := range out.depMap {
-		tmp := out.shapeNames[k].GetTargets(true)
+	// // attach indirect Targets (hope this pointer stuff works)
+	// for k, v := range out.depMap {
+	// 	tmp := out.shapeNames[k].GetTargets(true)
 
-		for _, dep := range v {
-			for _, s := range dep.name {
-				var indirects []TargetIndirect
-				for i := range tmp {
-					indirect := DepToIndirectTarget(dep, tmp[i])
-					indirects = append(indirects, indirect)
+	// 	for _, dep := range v {
+	// 		for _, s := range dep.name {
+	// 			var indirects []TargetIndirect
+	// 			for i := range tmp {
+	// 				indirect := DepToIndirectTarget(dep, tmp[i])
+	// 				indirects = append(indirects, indirect)
+	// 			}
+	// 			if debug {
+	// 				fmt.Println("Gotten ", len(tmp), " targets from dependant. Path ", dep.path)
+
+	// 				// fmt.Println("Number of dependant shapes: ", len(v))
+	// 				fmt.Println("Adding ", len(indirects), " indirect targets to shape ", s.name, " from origin ", k)
+	// 			}
+
+	// 			out.shapeNames[s.name].AddIndirectTargets(indirects, nil) // don't change paths, as they were already defined abvoes
+	// 		}
+	// 	}
+	// }
+
+	// attach indirect targets: the targets of a shape S are its direct targets, the values of every
+	// path through which some shape references S, and the targets of every shape that references S
+	// without a path. The last part is computed as a fixpoint, since such references can form cycles.
+
+	// the target expressions each shape already has, by their query, to detect new ones
+	known := make(map[string]map[string]bool)
+	for name, shape := range out.shapeNames {
+		known[name] = make(map[string]bool)
+		for _, t := range shape.GetTargets(true) {
+			known[name][GetTargetTerm(t)] = true
+		}
+	}
+	add := func(name string, targets []TargetIndirect) (added bool) {
+		for _, t := range targets {
+			key := GetTargetTerm(t)
+			if known[name][key] {
+				continue
+			}
+			known[name][key] = true
+			out.shapeNames[name].AddIndirectTargets([]TargetIndirect{t}, nil)
+			added = true
+		}
+		return added
+	}
+
+	// references through a path: the path's values from any node, independent of the referencing shape
+	for _, shape := range out.shapeNames {
+		for _, dep := range shape.GetDeps() {
+			if dep.path == nil {
+				continue
+			}
+			for _, ref := range dep.name {
+				add(ref.name, []TargetIndirect{{actual: TargetAny{}, indirection: dep.path}})
+			}
+		}
+	}
+
+	// references without a path: the referencing shape's targets, until no shape gains a new one
+	for changed := true; changed; {
+		changed = false
+		for _, shape := range out.shapeNames {
+			for _, dep := range shape.GetDeps() {
+				if dep.path != nil {
+					continue
 				}
-				if debug {
-					fmt.Println("Gotten ", len(tmp), " targets from dependant. Path ", dep.path)
-
-					// fmt.Println("Number of dependant shapes: ", len(v))
-					fmt.Println("Adding ", len(indirects), " indirect targets to shape ", s.name, " from origin ", k)
+				targets := append([]TargetExpression(nil), shape.GetTargets(true)...) // a copy, see below
+				for _, ref := range dep.name {
+					if add(ref.name, TransformToIndirect(targets)) {
+						changed = true
+					}
 				}
-
-				out.shapeNames[s.name].AddIndirectTargets(indirects, nil) // don't change paths, as they were already defined abvoes
 			}
 		}
 	}
@@ -353,6 +448,9 @@ func memListXone(toCheck []Table[rdf.Term], b []rdf.Term) bool {
 			if out {
 				matchOne = true
 			}
+		}
+		if !matchOne {
+			return false
 		}
 	}
 
@@ -851,6 +949,7 @@ func (s *ShaclDocument) UnwindAnswer(name string) Table[rdf.Term] {
 				}
 
 				uncondTable = &temp
+				uncondTable.Regroup()
 			}
 		case not:
 			ref := dep.name[0] // not has only single reference (current design)

@@ -81,6 +81,9 @@ func (s *SparqlEndpoint) Ping() error {
 // ClearGraph clears all triples from the specified named graph on the SPARQL endpoint.
 // If fromGraph is empty, returns an error.
 func (s *SparqlEndpoint) ClearGraph(fromGraph string) (out error) {
+	// empty targetCache, since data changes
+	targetCache = make(map[string]Table[rdf.Term])
+
 	if fromGraph == "" {
 		out = errors.New("need to provide a graph for the Clear command")
 		return out
@@ -141,6 +144,9 @@ func (s *SparqlEndpoint) doUpdate(updateString string) error {
 // When additive is false the target graph is cleared first; when true existing
 // triples are preserved and the new ones are simply appended.
 func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string, additive bool) (out error) {
+	// empty targetCache, since data changes
+	targetCache = make(map[string]Table[rdf.Term])
+
 	if fromGraph != "" {
 		s.fromGraph = fromGraph
 	}
@@ -189,6 +195,9 @@ func (s *SparqlEndpoint) Insert(input *rdf.Graph, fromGraph string, additive boo
 // Delete removes the triples in input from the specified named graph on the SPARQL endpoint.
 // If fromGraph is empty the endpoint's current graph is used.
 func (s *SparqlEndpoint) Delete(input *rdf.Graph, fromGraph string) (out error) {
+	// empty targetCache, since data changes
+	targetCache = make(map[string]Table[rdf.Term])
+
 	if fromGraph != "" {
 		s.fromGraph = fromGraph
 	}
