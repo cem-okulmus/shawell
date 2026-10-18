@@ -90,7 +90,7 @@ bin/oxigraph serve --location /tmp/oxigraph-data --bind 127.0.0.1:7878
 Then point shaWell at its endpoints:
 
 ```bash
-./shawellRules \
+./shawell \
   --endpoint http://127.0.0.1:7878/query \
   --endpointUpdate http://127.0.0.1:7878/update \
   --shaclDoc <path/to/document.ttl>
