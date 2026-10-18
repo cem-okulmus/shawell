@@ -9,7 +9,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/fatih/color"
-	rdfA "github.com/knakk/rdf"
 
 	rdf "github.com/cem-okulmus/rdf2go-1"
 	"github.com/knakk/sparql"
@@ -160,6 +159,46 @@ func (t *TableSimple[T]) Merge(other Table[T]) error {
 	return nil
 }
 
+func termFromBinding(kind, value, lang, datatype string) (rdf.Term, error) {
+	switch kind {
+	case "bnode":
+		return rdf.BlankNode{ID: value}, nil
+	case "uri":
+		return rdf.Resource{URI: value}, nil
+	case "literal", "typed-literal":
+		// Untyped literals are typed as xsd:string
+		if lang != "" {
+			return rdf.Literal{Value: value, Language: lang}, nil // the datatype is implied by the language
+		}
+		if datatype == "" {
+			datatype = _xsd + "string" // plain literals are xsd:string
+		}
+		return rdf.Literal{Value: value, Datatype: rdf.Resource{URI: datatype}}, nil
+	default:
+		return nil, fmt.Errorf("unknown binding type %q for value %q", kind, value)
+	}
+
+}
+
+func solutions(r *sparql.Results) (out []map[string]rdf.Term) {
+
+	out = make([]map[string]rdf.Term, 0)
+
+	for _, s := range r.Results.Bindings {
+		solution := make(map[string]rdf.Term)
+		for k, v := range s {
+			term, err := termFromBinding(v.Type, v.Value, v.Lang, v.DataType)
+			if err != nil {
+				log.Panicln(err) // a bound value must not silently become unbound
+			}
+			solution[k] = term
+		}
+		out = append(out, solution)
+	}
+
+	return out
+}
+
 // GetTable converts a SPARQL query result into a TableSimple data structure.
 // Each column in the SPARQL result becomes a column in the table.
 func GetTable(r *sparql.Results) *TableSimple[rdf.Term] {
@@ -172,33 +211,18 @@ func GetTable(r *sparql.Results) *TableSimple[rdf.Term] {
 		ordering[s] = i
 	}
 
-	for _, t := range r.Solutions() {
+	for _, t := range solutions(r) {
 
 		tupleOrdered := make([]rdf.Term, len(r.Head.Vars))
 
 		for _, s := range r.Head.Vars {
-
-			var newTerm rdf.Term
-
 			v := t[s]
-			if v == nil {
-				newTerm = Unbound{} // set unbound variables to unbound type
 
-			} else {
-				switch vt := v.(type) {
-				case rdfA.Blank:
-					newTerm = rdf.BlankNode{ID: vt.String()} // knakk's String() strips the "_:" prefix
-				case rdfA.IRI:
-					newTerm = rdf.Resource{URI: vt.String()}
-				case rdfA.Literal:
-					data := rdf.Resource{URI: vt.DataType.String()}
-					newTerm = rdf.Literal{Value: vt.String(), Datatype: data, Language: vt.Lang()}
-				default:
-					log.Panicf("unexpected term type %T", v)
-				}
+			if v == nil {
+				v = Unbound{} // set unbound variables to unbound type
 			}
 
-			tupleOrdered[ordering[s]] = newTerm // needed since range over map unsorted
+			tupleOrdered[ordering[s]] = v // needed since range over map unsorted
 		}
 
 		if len(tupleOrdered) == 0 {
@@ -348,6 +372,7 @@ func (t *GroupedTable[T]) Merge(other Table[T]) error {
 	}
 
 	t.content = append(t.content, otherCast.content...)
+	t.Regroup()
 
 	return nil
 }
