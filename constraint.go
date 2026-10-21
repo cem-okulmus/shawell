@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -2676,6 +2677,27 @@ func (s SimplePath) PropertyRDF() string {
 	return s.path.String()
 }
 
+// Adding new TestPath
+
+type TestPath struct {
+	shape    rdf.Term
+	negative bool
+}
+
+// PropertyString on a TestPath panics, to ensure it will not
+// "leak" into a SPARQL query unnoticed
+func (t TestPath) PropertyString() string {
+	log.Panicln("TestPath cannot be used in a SPARQL query.")
+	return ""
+}
+
+func (t TestPath) PropertyRDF() string {
+	if t.negative {
+		return fmt.Sprint("[ <", _sw, "negShapeTest> ", t.shape.String(), " ]")
+	}
+	return fmt.Sprint("[ <", _sw, "shapeTest> ", t.shape.String(), " ]")
+}
+
 type InversePath struct {
 	path PropertyPath
 }
@@ -2728,15 +2750,15 @@ func (a AlternativePath) PropertyRDF() string {
 	return fmt.Sprint("[ <", _sh, "alternativePath> ( ", strings.Join(out, " "), " ) ]")
 }
 
-type ZerOrMorePath struct {
+type ZeroOrMorePath struct {
 	path PropertyPath
 }
 
-func (z ZerOrMorePath) PropertyRDF() string {
+func (z ZeroOrMorePath) PropertyRDF() string {
 	return fmt.Sprint("[ <", _sh, "zeroOrMorePath> ", z.path.PropertyRDF(), " ]")
 }
 
-func (z ZerOrMorePath) PropertyString() string {
+func (z ZeroOrMorePath) PropertyString() string {
 	return "(" + z.path.PropertyString() + ")*"
 }
 
@@ -2752,15 +2774,15 @@ func (o OneOrMorePath) PropertyRDF() string {
 	return fmt.Sprint("[ <", _sh, "oneOrMorePath> ", o.path.PropertyRDF(), " ]")
 }
 
-type ZerOrOnePath struct {
+type ZeroOrOnePath struct {
 	path PropertyPath
 }
 
-func (o ZerOrOnePath) PropertyString() string {
+func (o ZeroOrOnePath) PropertyString() string {
 	return "(" + o.path.PropertyString() + ")?"
 }
 
-func (o ZerOrOnePath) PropertyRDF() string {
+func (o ZeroOrOnePath) PropertyRDF() string {
 	return fmt.Sprint("[ <", _sh, "zeroOrOnePath> ", o.path.PropertyRDF(), " ]")
 }
 
@@ -2777,6 +2799,12 @@ func ExtractPropertyPath(graph *rdf.Graph, initTerm rdf.Term) (out PropertyPath,
 		triple := graph.One(initTerm, nil, nil)
 		// fmt.Println("Gotten triple: ", triple)
 		switch triple.Predicate.RawValue() {
+		case _sw + "shapeTest":
+			shape := triple.Object
+			out = TestPath{shape: shape, negative: false}
+		case _sw + "negShapeTest":
+			shape := triple.Object
+			out = TestPath{shape: shape, negative: true}
 		case _sh + "inversePath":
 			further := triple.Object
 
@@ -2799,7 +2827,7 @@ func ExtractPropertyPath(graph *rdf.Graph, initTerm rdf.Term) (out PropertyPath,
 			if err2 != nil {
 				return out, err2
 			}
-			out = ZerOrMorePath{path: pathRec}
+			out = ZeroOrMorePath{path: pathRec}
 		case _sh + "oneOrMorePath":
 			further := triple.Object
 			pathRec, err2 := ExtractPropertyPath(graph, further)
@@ -2813,7 +2841,7 @@ func ExtractPropertyPath(graph *rdf.Graph, initTerm rdf.Term) (out PropertyPath,
 			if err2 != nil {
 				return out, err2
 			}
-			out = ZerOrOnePath{path: pathRec}
+			out = ZeroOrOnePath{path: pathRec}
 		case _rdf + "first", _rdf + "rest":
 			allTriples := graph.All(initTerm, nil, nil) // get both triples
 			var paths []PropertyPath
@@ -2866,6 +2894,116 @@ func ExtractPropertyPath(graph *rdf.Graph, initTerm rdf.Term) (out PropertyPath,
 	}
 	// fmt.Println("Found pp: ", out.PropertyString())
 	return out, nil
+}
+
+// hasTest checks if the property path has any shape tests
+func hasTest(p PropertyPath) bool {
+
+	switch p := (p).(type) {
+	case TestPath:
+		return true
+	case InversePath:
+		return hasTest(p.path)
+	case SequencePath:
+		if slices.ContainsFunc(p.paths, hasTest) {
+			return true
+		}
+	case AlternativePath:
+		if slices.ContainsFunc(p.paths, hasTest) {
+			return true
+		}
+	case ZeroOrMorePath:
+		return hasTest(p.path)
+	case OneOrMorePath:
+		return hasTest(p.path)
+	case ZeroOrOnePath:
+		return hasTest(p.path)
+	default:
+		return false
+	}
+
+	return false
+
+}
+
+// testUnderStar checks if the property path has any shape tests under a star (or plus) operator
+func testUnderStar(p PropertyPath) bool {
+	switch p := (p).(type) {
+	case ZeroOrMorePath:
+		return hasTest(p.path)
+	case OneOrMorePath:
+		return hasTest(p.path)
+	case InversePath:
+		return testUnderStar(p.path)
+	case SequencePath:
+		if slices.ContainsFunc(p.paths, testUnderStar) {
+			return true
+		}
+	case AlternativePath:
+		if slices.ContainsFunc(p.paths, testUnderStar) {
+			return true
+		}
+	default:
+		return false
+	}
+
+	return false
+
+}
+
+// stripTests removes all shape tests from a property path, returning a new property path without any tests
+// in case the property paths contains only tests, it returns nil
+func stripTests(p PropertyPath) PropertyPath {
+	switch p := (p).(type) {
+	case TestPath:
+		return nil
+	case InversePath:
+		return InversePath{path: stripTests(p.path)}
+	case SequencePath:
+		var newPaths []PropertyPath
+		for i := range p.paths {
+			newPath := stripTests(p.paths[i])
+			if newPath != nil {
+				newPaths = append(newPaths, newPath)
+			}
+		}
+		if len(newPaths) == 0 {
+			return nil
+		}
+		return SequencePath{paths: newPaths}
+	case AlternativePath:
+		var newPaths []PropertyPath
+		for i := range p.paths {
+			newPath := stripTests(p.paths[i])
+			if newPath != nil {
+				newPaths = append(newPaths, newPath)
+			}
+		}
+		if len(newPaths) == 0 {
+			return nil
+		}
+		return AlternativePath{paths: newPaths}
+	case ZeroOrMorePath:
+		newPath := stripTests(p.path)
+		if newPath == nil {
+			return nil
+		}
+		return ZeroOrMorePath{newPath}
+	case OneOrMorePath:
+		newPath := stripTests(p.path)
+		if newPath == nil {
+			return nil
+		}
+		return OneOrMorePath{newPath}
+	case ZeroOrOnePath:
+		newPath := stripTests(p.path)
+		if newPath == nil {
+			return nil
+		}
+		return ZeroOrOnePath{newPath}
+	default:
+		return p
+	}
 }
 
 // GetPropertyShape extracts a property shape from the graph, by looking at the given term,
@@ -2947,6 +3085,11 @@ func (s *ShaclDocument) GetPropertyShape(graph *rdf.Graph, term rdf.Term) (*Prop
 		// out.name = fmt.Sprint("Property", id)
 		out.name = term.String()
 		// fmt.Println("Name of property", out.name)
+	}
+
+	// For now, paths with tests are rejected, as support for them is not yet implemented
+	if hasTest(out.path) {
+		log.Panicln("PropertyShape with path containing shape tests is not supported yet: ", out.path.PropertyString())
 	}
 
 	// No need for a separate dependency check, since GetNodeShape above already took care of it

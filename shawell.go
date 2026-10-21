@@ -58,6 +58,7 @@ var prefixes = make(map[string]string)
 
 // making it easier to define proper terms
 var (
+	_sw   = "http://www.w3.org/ns/shacl-well-founded#"
 	_sh   = "http://www.w3.org/ns/shacl#"
 	_rdf  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 	_rdfs = "http://www.w3.org/2000/01/rdf-schema#"
@@ -71,6 +72,7 @@ func GetNameSpace(file *os.File) {
 	// TODO: make this less crazy and ugly
 
 	// fix standard prefixes
+	prefixes["sw:"] = _sw
 	prefixes["sh:"] = _sh
 	prefixes["rdf:"] = _rdf
 	prefixes["rdfs:"] = _rdfs

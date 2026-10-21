@@ -201,6 +201,10 @@ func GetNodeTerms(graph *rdf.Graph) []rdf.Term {
 		}
 	}
 
+	// shapes that only appear as a test in a property path
+	out = append(out, GetShapeObjects(graph.All(nil, rdf.NewResource(_sw+"shapeTest"), nil))...)
+	out = append(out, GetShapeObjects(graph.All(nil, rdf.NewResource(_sw+"notShapeTest"), nil))...)
+
 	out = removeDuplicate(out)
 
 	// remove anything that has path
@@ -248,7 +252,8 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool) (out Sh
 			continue
 		}
 
-		out.GetNodeShape(rdfGraph, t, nil)
+		_, err := out.GetNodeShape(rdfGraph, t, nil)
+		check(err)
 	}
 
 	PropertyShapeTriples := rdfGraph.All(nil, rdf.NewResource(_sh+"path"), nil)
@@ -264,7 +269,8 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool) (out Sh
 			continue
 		}
 
-		out.GetPropertyShape(rdfGraph, t.Subject)
+		_, err := out.GetPropertyShape(rdfGraph, t.Subject)
+		check(err)
 	}
 
 	// compute transitive Closure of deps
