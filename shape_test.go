@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	rdf "github.com/cem-okulmus/rdf2go-1"
@@ -70,5 +71,42 @@ func TestPropertyXoneReportsZeroMatchingShapes(t *testing.T) {
 	}
 	if got := reports[0].sourceConstraintComponent.RawValue(); got != _sh+"XoneConstraintComponent" {
 		t.Fatalf("expected xone constraint component, got %s", got)
+	}
+}
+
+// TestShapeParsingErrors checks that GetShaclDocument does not silently drop a malformed shape
+// (known bug H), wherever the shape is defined.
+func TestShapeParsingErrors(t *testing.T) {
+	const prefixes = `@prefix ex: <http://example.org/parsing#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+`
+	cases := []struct {
+		name      string
+		turtle    string
+		malformed bool
+	}{
+		{"top-level property shape", `ex:P sh:targetNode ex:a ; sh:path [ ex:bogus ex:knows ] ; sh:minCount 1 .`, true},
+		{"via sh:property", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path [ ex:bogus ex:knows ] ; sh:minCount 1 ] .`, true},
+		{"inside sh:not", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:not [ sh:path [ ex:bogus ex:knows ] ; sh:minCount 1 ] .`, true},
+		{"valid", `ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:knows ; sh:minCount 1 ] .`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g := rdf.NewGraph(_sh)
+			if err := g.Parse(strings.NewReader(prefixes+c.turtle), "text/turtle"); err != nil {
+				t.Fatal(err)
+			}
+			var recovered any
+			func() {
+				defer func() { recovered = recover() }()
+				GetShaclDocument(g, "<"+_sh+"parsing>", false)
+			}()
+			if c.malformed && recovered == nil {
+				t.Fatal("malformed shape was parsed without an error")
+			}
+			if !c.malformed && recovered != nil {
+				t.Fatalf("valid document failed to parse: %v", recovered)
+			}
+		})
 	}
 }
