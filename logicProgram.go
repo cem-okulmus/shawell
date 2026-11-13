@@ -258,6 +258,35 @@ func (d DLVOutput) UndefinedToTables() (out []Table[rdf.Term]) {
 	return out
 }
 
+type ClingoWitness struct {
+	Value []string
+	Costs []int
+}
+
+type ClingoCall struct {
+	witnesses []ClingoWitness
+}
+
+type ClingoModels struct {
+	number   int
+	more     string
+	optimum  string
+	cautious string
+}
+
+type ClingoOutput struct {
+	call      []ClingoCall
+	result    string
+	models    ClingoModels
+	TimeLimit *int
+}
+
+// runClingo invokes Clingo under the specified semantics and returns the parsed output.
+// When debug is true the raw DLV output is printed, passed through DecodedString.
+func (p serialisedProgram) runClingo(debug bool, nofacts bool) (ClingoOutput, bool) {
+	return ClingoOutput{}, false // TODO
+}
+
 // runDLV invokes DLV under well-founded semantics and returns the parsed output.
 // When debug is true the raw DLV output is printed, passed through DecodedString.
 func (p serialisedProgram) runDLV(debug bool, nofacts bool) (DLVOutput, bool) {
@@ -406,11 +435,11 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			// var bodyOne []string
 			for _, v := range valuesSlice {
-				bodyOr = append(bodyOr, fmt.Sprint("OrShape", orVar, "(", rewrite(v), ")"))
+				bodyOr = append(bodyOr, fmt.Sprint("orShape", orVar, "(", rewrite(v), ")"))
 
 				for _, ref := range deps[i].name {
 					orRules = append(orRules, serialisedRule{
-						head: fmt.Sprint("OrShape", orVar, "(", rewrite(v), ")"),
+						head: fmt.Sprint("orShape", orVar, "(", rewrite(v), ")"),
 						body: []string{fmt.Sprint(ref.ref.GetLogName(), "(", rewrite(v), ")")},
 					})
 				}
@@ -442,7 +471,7 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			var genericXONErules []serialisedRule
 
-			headXONEgeneric := fmt.Sprint("XONE_TERM_", xoneVar, "( VAR )")
+			headXONEgeneric := fmt.Sprint("xone_term_", xoneVar, "( VAR )")
 
 			// Produce all valid combinations, to satisfy XONE,
 			// where all the refs are negated, except one,
@@ -472,10 +501,10 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 
 			var specificXONErule serialisedRule
 
-			specificXONErule.head = fmt.Sprint("XONE_", xoneVar, "( ", element, " )")
+			specificXONErule.head = fmt.Sprint("xone_", xoneVar, "( ", element, " )")
 
 			for v := range valuesSlice {
-				specificXONErule.body = append(specificXONErule.body, fmt.Sprint("XONE_TERM_", xoneVar, "( ", rewrite(valuesSlice[v]), " )"))
+				specificXONErule.body = append(specificXONErule.body, fmt.Sprint("xone_term_", xoneVar, "( ", rewrite(valuesSlice[v]), " )"))
 			}
 
 			// attach the XONE shape predicate to core rule
@@ -504,9 +533,9 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 				}
 			}
 
-			mark := fmt.Sprint("Qual", qual)
-			atLeast := fmt.Sprint("AtLeast", qual)
-			qualHead := fmt.Sprint(mark, "Head(", element, ")")
+			mark := fmt.Sprint("qual", qual)
+			atLeast := fmt.Sprint("atLeast", qual)
+			qualHead := fmt.Sprint(mark, "head(", element, ")")
 
 			qual++
 
@@ -679,7 +708,7 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 	numMatched := 0
 
 	if internalDeps {
-		body = append(body, headerName+"INTERN(  VAR )")
+		body = append(body, headerName+"intern(  VAR )")
 
 		for i := range deps {
 			if !deps[i].external {
@@ -752,7 +781,7 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 
 			// var tempRules []serialisedRule // collection of all rules generated so far
 			// expandRules for target if InternDep
-			tempRules := expandRules([]rdf.Term{element}, attrMap[0], deps, headerName+"INTERN", rewrite(element))
+			tempRules := expandRules([]rdf.Term{element}, attrMap[0], deps, headerName+"intern", rewrite(element))
 
 			out.rules = append(out.rules, tempRules...)
 		}
@@ -767,7 +796,7 @@ func (s ShaclDocument) TableToLP(tablePreCast Table[rdf.Term], deps []dependency
 
 			// expandRules for target if InternDep
 			if internalDeps {
-				tempRules = expandRules([]rdf.Term{element}, attrMap[0], deps, headerName+"INTERN", rewrite(element))
+				tempRules = expandRules([]rdf.Term{element}, attrMap[0], deps, headerName+"intern", rewrite(element))
 			}
 
 			// for _, groupMap := range  {

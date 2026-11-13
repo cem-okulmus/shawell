@@ -474,16 +474,47 @@ func findDepScript() (script, interpreter string, err error) {
 	return "", "", fmt.Errorf("%s not found next to executable or in working directory", name)
 }
 
+func findClingo() ([]string, error) {
+	if path, err := exec.LookPath("clingo"); err == nil {
+		return []string{path}, nil
+	}
+	// fist check for local binary in bin/ folder
+	local := "bin/clingo"
+	if runtime.GOOS == "windows" {
+		local = "bin/clingo.exe"
+	}
+
+	localVenvPath := "bin/clingo-venv/bin/python"
+	if runtime.GOOS == "windows" {
+		localVenvPath = "bin/clingo-venv/Scripts/python.exe"
+	}
+
+	if _, err := os.Stat(localVenvPath); err == nil {
+		// venv exists, return command prefix
+		return []string{localVenvPath, "-m", "clingo"}, nil
+	}
+	if _, err := os.Stat(local); err == nil {
+		return []string{local}, nil
+	}
+	return []string{}, fmt.Errorf("clingo binary not found in PATH or %s or %s; "+
+		"needs to be downloaded from https://potassco.org/clingo/, "+
+		"the included download_deps.sh can set it up easily", local, localVenvPath)
+}
+
 // ensureDependencies checks whether the required binaries are present and, if
 // any are missing, locates and runs the platform-appropriate download script.
-func ensureDependencies(needOxigraph bool) {
+func ensureDependencies(needOxigraph bool, needClingo bool) {
 	dlvMissing := !binaryExists(dlv)
 	oxiMissing := needOxigraph && func() bool {
 		_, err := findOxigraph()
 		return err != nil
 	}()
+	clingoMissing := needClingo && func() bool {
+		_, err := findClingo()
+		return err != nil
+	}()
 
-	if !dlvMissing && !oxiMissing {
+	if !dlvMissing && !oxiMissing && !clingoMissing {
 		return
 	}
 
@@ -504,13 +535,21 @@ func ensureDependencies(needOxigraph bool) {
 		}
 	}
 
-	var cmd *exec.Cmd
+	var args []string
 	if runtime.GOOS == "windows" {
 		// -ExecutionPolicy Bypass allows running unsigned local scripts
-		cmd = exec.Command(interpPath, "-ExecutionPolicy", "Bypass", "-File", script)
+		args = []string{"-ExecutionPolicy", "Bypass", "-File", script}
+		if clingoMissing {
+			args = append(args, "--clingo")
+		}
 	} else {
-		cmd = exec.Command(interpPath, script)
+		args = []string{script}
+		if clingoMissing {
+			args = append(args, "--clingo")
+		}
+
 	}
+	cmd := exec.Command(interpPath, args...)
 
 	fmt.Println("Missing dependencies detected — running", script)
 	cmd.Stdout = os.Stdout
@@ -544,6 +583,8 @@ type cliOptions struct {
 	DemoOutputQueries bool           `short:"Q" long:"demoOutputQueries"  description:"Outputs only the produced SPARQL queries."`
 	Timer             bool           `            long:"timer"             description:"Print time composition after validation."`
 	Completion        string         `short:"c" long:"completion"         description:"Output a shell completion setup script and exit." choice:"bash" choice:"zsh" choice:"fish"`
+	Clingo            string         `long:"clingo"             description:"The location of the clingo binary used to evaluate recursive SHACL."`
+	Semantics         string         `short:"m" long:"semantics"          description:"The semantics to use for recursive SHACL evaluation. Choices are:'well-founded', 'stable-brave' and 'stable-cautious'."`
 }
 
 // printCompletion outputs the one-liner shell setup that hooks shawell into the shell's
@@ -644,6 +685,10 @@ func main() {
 
 	// set DLV
 	dlv = string(opts.Dlv)
+
+	// For clingo: only needed if semantics is not well-founded and clingo path is not provided explicitly by user.
+	// FindClingo will then be used to deliver the command.
+	ensureDependencies(opts.Local, opts.Semantics != "" && opts.Semantics != "well-founded" && opts.Clingo == "")
 
 	shaclDoc, err := os.Open(string(opts.ShaclDoc))
 	check(err)

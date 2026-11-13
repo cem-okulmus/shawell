@@ -76,7 +76,7 @@ func (n *NodeShape) GetLogName() string {
 	// if demoLP && n.IRI != nil {
 	// 	return n.IRI.RawValue()
 	// }
-	return fmt.Sprint("Shape", n.id)
+	return fmt.Sprint("shape", n.id)
 }
 
 // GetQualName returns the qualified name of the node shape used for variable naming in SPARQL.
@@ -664,7 +664,7 @@ func (p *PropertyShape) Nested() bool {
 
 // GetLogName returns the logical (internal) name of the property shape.
 func (p *PropertyShape) GetLogName() string {
-	return fmt.Sprint("Shape", p.id)
+	return fmt.Sprint("shape", p.id)
 }
 
 // GetQualName returns the qualified name of the property shape for SPARQL variable naming.

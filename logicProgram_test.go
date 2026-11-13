@@ -41,13 +41,13 @@ func TestExpandRulesOrKeepsExistingRules(t *testing.T) {
 				},
 			},
 		},
-		"Head",
+		"head",
 		"focus",
 	)
 
 	var headRule *serialisedRule
 	for i := range rules {
-		if rules[i].head == "Head(focus)" {
+		if rules[i].head == "head(focus)" {
 			headRule = &rules[i]
 			break
 		}
@@ -57,10 +57,10 @@ func TestExpandRulesOrKeepsExistingRules(t *testing.T) {
 	}
 
 	body := strings.Join(headRule.body, ",")
-	if !strings.Contains(body, "Shape1(") {
+	if !strings.Contains(body, "shape1(") {
 		t.Fatalf("expected primary rule to keep existing dependency body, got %q", body)
 	}
-	if !strings.Contains(body, "OrShape1(") {
+	if !strings.Contains(body, "orShape1(") {
 		t.Fatalf("expected primary rule to include or dependency body, got %q", body)
 	}
 }
@@ -86,7 +86,7 @@ type depSpec struct {
 func (d depSpec) String() string {
 	var refs []string
 	for _, r := range d.refs {
-		refs = append(refs, fmt.Sprint("Shape", r))
+		refs = append(refs, fmt.Sprint("shape", r))
 	}
 	if d.mode == qualified {
 		return fmt.Sprintf("qualified(%s, min=%d, max=%d, disjoint=%v)", strings.Join(refs, ","), d.min, d.max, d.disjoint)
@@ -243,7 +243,7 @@ func describeWorld(w world, n int) string {
 				vals = append(vals, fmt.Sprint("v", v))
 			}
 		}
-		parts = append(parts, fmt.Sprintf("Shape%d={%s}", s, strings.Join(vals, ",")))
+		parts = append(parts, fmt.Sprintf("shape%d={%s}", s, strings.Join(vals, ",")))
 	}
 	return fmt.Sprintf("%d value node(s): %s", n, strings.Join(parts, " "))
 }
@@ -338,7 +338,7 @@ func checkExpansions(t *testing.T, exps []expansion, inner []innerShape, shapes 
 		for _, s := range shapes {
 			for v := 0; v < n; v++ {
 				if w[s][v] {
-					program.WriteString(fmt.Sprintf("Shape%d(%s).\n", s, rewrite(values[v])))
+					program.WriteString(fmt.Sprintf("shape%d(%s).\n", s, rewrite(values[v])))
 				}
 			}
 		}
@@ -353,7 +353,7 @@ func checkExpansions(t *testing.T, exps []expansion, inner []innerShape, shapes 
 			for v := 0; v < n; v++ {
 				full[in.id][v] = conforms([]depSpec{in.dep}, []int{0}, 1, valueWorld(w, v))
 				rules := expandRules([]rdf.Term{values[v]}, []int{0}, []dependency{in.dep.dependency()},
-					fmt.Sprint("Shape", in.id), rewrite(values[v]))
+					fmt.Sprint("shape", in.id), rewrite(values[v]))
 				worldRules[wi] = append(worldRules[wi], rules...)
 			}
 		}

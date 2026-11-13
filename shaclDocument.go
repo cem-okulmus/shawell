@@ -1332,11 +1332,11 @@ func (s *ShaclDocument) AdoptLPAnswers(LPTables []Table[rdf.Term]) error {
 			}
 		}
 		if !shapeFound &&
-			!strings.HasSuffix(predName, "INTERN") &&
-			!strings.HasPrefix(predName, "XONE") &&
-			!strings.HasPrefix(predName, "OrShape") &&
-			!strings.HasPrefix(predName, "Qual") &&
-			!strings.HasPrefix(predName, "AtLeast") &&
+			!strings.HasSuffix(predName, "intern") &&
+			!strings.HasPrefix(predName, "xone") &&
+			!strings.HasPrefix(predName, "orShape") &&
+			!strings.HasPrefix(predName, "qual") &&
+			!strings.HasPrefix(predName, "atLeast") &&
 			!strings.HasPrefix(predName, "count") {
 			fmt.Println("unmatched LP predicate: ", predName)
 			return errors.New("could not match all lptables")

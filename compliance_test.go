@@ -243,7 +243,7 @@ func TestLogicProgramOxigraph(t *testing.T) {
 }
 
 func Compliance(t *testing.T, forceLP bool) EARLReport {
-	ensureDependencies(false)
+	ensureDependencies(false, false)
 
 	dlv = "bin/dlv"
 
@@ -266,7 +266,7 @@ func Compliance(t *testing.T, forceLP bool) EARLReport {
 }
 
 func ComplianceOxigraph(t *testing.T, forceLP bool) EARLReport {
-	ensureDependencies(true)
+	ensureDependencies(true, false)
 
 	dlv = "bin/dlv"
 
