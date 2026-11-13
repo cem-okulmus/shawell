@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -125,20 +126,20 @@ const (
 	MaxInt  = int(MaxUint >> 1)
 )
 
-type DLVAnswer struct {
+type LPAnswer struct {
 	Negation  string   `parser:" @\"-\"? "`
 	Predicate string   `parser:" @(Number|Ident|String) "`
 	Constant  []string `parser:"\"(\" [ @(Number|Ident|String) { \",\" @(Number|Ident|String) } ] \")\""`
 }
 
-type DLVOutput struct {
-	Answers          []DLVAnswer `parser:" \"True:\" \"{\" ( @@ \",\"?)* \"}\" "`
-	UndefinedAnswers []DLVAnswer `parser:" \"Undefined:\" \"{\" ( @@ \",\"?)* \"}\" "`
+type LPOutput struct {
+	Answers          []LPAnswer `parser:" \"True:\" \"{\" ( @@ \",\"?)* \"}\" "`
+	UndefinedAnswers []LPAnswer `parser:" \"Undefined:\" \"{\" ( @@ \",\"?)* \"}\" "`
 }
 
-// ToTables converts a DLV output into a slice of result tables, one per arity level.
+// ToTables converts a LP output into a slice of result tables, one per arity level.
 // Each row contains [decoded_predicate, decoded_arg0, ...]; predicate is column 0.
-func (d DLVOutput) ToTables() (out []Table[rdf.Term]) {
+func (d LPOutput) ToTables() (out []Table[rdf.Term]) {
 	arityMap := make(map[int][][]string)
 
 	for i := range d.Answers {
@@ -207,8 +208,8 @@ func (d DLVOutput) ToTables() (out []Table[rdf.Term]) {
 	return out
 }
 
-// UndefinedToTables converts the Undefined set of a DLV output into tables, one per arity level.
-func (d DLVOutput) UndefinedToTables() (out []Table[rdf.Term]) {
+// UndefinedToTables converts the Undefined set of a LP output into tables, one per arity level.
+func (d LPOutput) UndefinedToTables() (out []Table[rdf.Term]) {
 	arityMap := make(map[int][][]string)
 
 	for i := range d.UndefinedAnswers {
@@ -258,43 +259,35 @@ func (d DLVOutput) UndefinedToTables() (out []Table[rdf.Term]) {
 	return out
 }
 
-type ClingoWitness struct {
-	Value []string
-	Costs []int
-}
+// type ClingoWitness struct {
+// 	Value []string
+// 	Costs []int
+// }
 
-type ClingoCall struct {
-	witnesses []ClingoWitness
-}
+// type ClingoCall struct {
+// 	witnesses []ClingoWitness
+// }
 
-type ClingoModels struct {
-	number   int
-	more     string
-	optimum  string
-	cautious string
-}
+// type ClingoModels struct {
+// 	number   int
+// 	more     string
+// 	optimum  string
+// 	cautious string
+// }
+
+type clingoSemantics int
+
+const (
+	clingoStableBrave clingoSemantics = iota
+	clingoStableCautious
+)
 
 type ClingoOutput struct {
-	call      []ClingoCall
-	result    string
-	models    ClingoModels
-	TimeLimit *int
+	Answers []LPAnswer `parser:" @@* "`
+	Status  string     `parser:" @(\"SATISFIABLE\" | \"UNSATISFIABLE\" | \"UNKNOWN\") "`
 }
 
-// runClingo invokes Clingo under the specified semantics and returns the parsed output.
-// When debug is true the raw DLV output is printed, passed through DecodedString.
-func (p serialisedProgram) runClingo(debug bool, nofacts bool) (ClingoOutput, bool) {
-	return ClingoOutput{}, false // TODO
-}
-
-// runDLV invokes DLV under well-founded semantics and returns the parsed output.
-// When debug is true the raw DLV output is printed, passed through DecodedString.
-func (p serialisedProgram) runDLV(debug bool, nofacts bool) (DLVOutput, bool) {
-	if p.IsEmpty() {
-		return DLVOutput{}, false
-	}
-
-	graphLexer := lexer.Must(ebnf.New(`
+var graphLexer = lexer.Must(ebnf.New(`
     Comment = ("%" | "//") { "\u0000"…"\uffff"-"\n" } .
     Ident = (digit| alpha | "_") { Punct |  "_" | alpha | digit } .
     String = "\"" { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } "\"" .
@@ -306,6 +299,95 @@ func (p serialisedProgram) runDLV(debug bool, nofacts bool) (DLVOutput, bool) {
     digit = "0"…"9" .
     any = "\u0000"…"\uffff" .
     `))
+
+// runClingo invokes Clingo under the specified semantics and returns the parsed output.
+// When debug is true the raw Clingo output is printed, passed through DecodedString.
+func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPOutput, bool) {
+	if p.IsEmpty() {
+		return LPOutput{}, false
+	}
+
+	var enumMode string
+
+	switch semantics {
+	case clingoStableBrave:
+		enumMode = "--enum-mode=brave"
+	case clingoStableCautious:
+		enumMode = "--enum-mode=cautious"
+	}
+
+	args := []string{"--verbose=0", "--quiet=1,2,2", "--warn=none", enumMode}
+	clingoCmd, err := findClingo()
+	check(err)
+
+	shapes := make(map[string]bool)
+	// determine the list of shape atoms to pass to clingo as show lines
+
+	for _, r := range p.rules {
+		name, _, _ := strings.Cut(r.head, "(")
+		name = strings.TrimSpace(name)
+		if strings.HasPrefix(name, "shape") && !strings.HasSuffix(name, "intern") {
+			shapes[name] = true
+		}
+	}
+
+	cmd := exec.Command(clingoCmd[0], append(clingoCmd[1:], args...)...)
+	var outputLP strings.Builder
+	outputLP.WriteString(p.String())
+
+	for s := range shapes {
+		fmt.Fprint(&outputLP, "#show ", s, "/1 .\n")
+	}
+	cmd.Stdin = strings.NewReader(outputLP.String())
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	out, err := cmd.Output()
+	outString := string(out)
+
+	var exitErr *exec.ExitError
+	if err != nil && !errors.As(err, &exitErr) {
+		check(err) // clingo could not be started
+	}
+
+	if debug {
+		fmt.Println("----\n\n", DecodedString(outString), "\n\n-------")
+	}
+
+	parser := participle.MustBuild(&ClingoOutput{}, participle.UseLookahead(1), participle.Lexer(graphLexer),
+		participle.Elide("Comment", "Whitespace"))
+
+	// set max size for matchings in participle
+	participle.MaxIterations = MaxInt
+
+	var parsedClingoOutput ClingoOutput
+	err = parser.ParseString(outString, &parsedClingoOutput)
+	if err != nil {
+		fmt.Println("----\n\n", outputLP.String(), "\n\n-------")
+		log.Panicln("input for parser: ", outString, "\n \n", err)
+	}
+
+	if strings.Contains(parsedClingoOutput.Status, "UNSATISFIABLE") {
+		fmt.Fprintln(os.Stderr, "Clingo semantic error: the logic program is incoherent or no stable model exists.")
+		fmt.Fprintln(os.Stderr, "Clingo output:\n", outString)
+		os.Exit(1)
+	} else if strings.Contains(parsedClingoOutput.Status, "UNKNOWN") {
+		fmt.Fprintln(os.Stderr, "Clingo failed: \n", stderr.String())
+		fmt.Fprintln(os.Stderr, "Clingo output:\n", outString)
+		os.Exit(1)
+	}
+
+	return LPOutput{
+		Answers: parsedClingoOutput.Answers,
+	}, true
+}
+
+// runDLV invokes DLV under well-founded semantics and returns the parsed output.
+// When debug is true the raw DLV output is printed, passed through DecodedString.
+func (p serialisedProgram) runDLV(debug bool, nofacts bool) (LPOutput, bool) {
+	if p.IsEmpty() {
+		return LPOutput{}, false
+	}
 
 	args := []string{"--wellfounded"}
 	if nofacts {
@@ -336,13 +418,13 @@ func (p serialisedProgram) runDLV(debug bool, nofacts bool) (DLVOutput, bool) {
 		fmt.Println("----\n\n", DecodedString(outString), "\n\n-------")
 	}
 
-	parser := participle.MustBuild(&DLVOutput{}, participle.UseLookahead(1), participle.Lexer(graphLexer),
+	parser := participle.MustBuild(&LPOutput{}, participle.UseLookahead(1), participle.Lexer(graphLexer),
 		participle.Elide("Comment", "Whitespace"))
 
 	// set max size for matchings in participle
 	participle.MaxIterations = MaxInt
 
-	var parsedDLVOutput DLVOutput
+	var parsedDLVOutput LPOutput
 	err = parser.ParseString(outString, &parsedDLVOutput)
 	if err != nil {
 		fmt.Println("----\n\n", outLP, "\n\n-------")
