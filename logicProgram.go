@@ -19,6 +19,8 @@ import (
 	"github.com/alecthomas/participle/lexer/ebnf"
 )
 
+var clingoCmd []string // to be defined in main()
+
 // the hardcoded address to DLV
 var dlv = func() string {
 	if runtime.GOOS == "windows" {
@@ -311,7 +313,7 @@ func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPO
 
 	switch semantics {
 	case clingoStableBrave:
-		enumMode = "--enum-mode=brave"
+		enumMode = "" // do not use enum mode brave, since we need a single model to satisfy all targets
 	case clingoStableCautious:
 		enumMode = "--enum-mode=cautious"
 	}

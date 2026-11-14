@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1020,5 +1022,264 @@ ex:n1 ex:p ex:n2 .
 		if got := describeInvalid(invalid); got != "" || !res {
 			t.Errorf("forceLP=%v: verdict %v with invalid targets %q, expected true", forceLP, res, got)
 		}
+	}
+}
+
+// The tests below are those of step 1.8 of stable_semantics_plan.md, written against runClingo as
+// it is implemented: it takes a semantics instead of free flags, shows the shapeN/1 atoms only, and
+// reports "no model" and solver errors by terminating the process. Each case therefore runs
+// runClingo in a copy of the test binary (TestClingoHelperProcess), so that an exit or a panic
+// becomes an observable outcome instead of ending the test run.
+
+const (
+	clingoCaseEnv   = "SHAWELL_CLINGO_CASE"
+	clingoResultTag = "CLINGO-RESULT "
+)
+
+// clingoCase is the input handed to the helper process.
+type clingoCase struct {
+	Rules     [][]string // each rule as head followed by its body atoms
+	Semantics int
+}
+
+// clingoOutcome is what the helper process did with a clingoCase.
+type clingoOutcome struct {
+	returned bool     // runClingo came back, as opposed to ending the process
+	ok       bool     // the second return value of runClingo
+	atoms    []string // the true atoms, sorted, e.g. "shape1(c)"
+	exitCode int
+	stderr   string
+}
+
+func (o clingoOutcome) String() string {
+	if o.returned {
+		return fmt.Sprintf("returned ok=%v atoms=%v", o.ok, o.atoms)
+	}
+	return fmt.Sprintf("process ended with exit code %d\nstderr:\n%s", o.exitCode, o.stderr)
+}
+
+// requireClingo skips the test when no clingo can be found.
+func requireClingo(t *testing.T) []string {
+	t.Helper()
+	cmd, err := findClingo()
+	if err != nil {
+		t.Skipf("clingo not found: %v", err)
+	}
+	return cmd
+}
+
+// TestClingoHelperProcess is not a test: it is the body of the process started by solveWithClingo.
+func TestClingoHelperProcess(t *testing.T) {
+	encoded := os.Getenv(clingoCaseEnv)
+	if encoded == "" {
+		return
+	}
+	var c clingoCase
+	if err := json.Unmarshal([]byte(encoded), &c); err != nil {
+		fmt.Fprintln(os.Stderr, "bad clingo case:", err)
+		os.Exit(3)
+	}
+	var program serialisedProgram
+	for _, r := range c.Rules {
+		program.rules = append(program.rules, serialisedRule{head: r[0], body: r[1:]})
+	}
+
+	out, ok := program.runClingo(false, clingoSemantics(c.Semantics))
+
+	atoms := []string{}
+	for _, a := range out.Answers {
+		atoms = append(atoms, fmt.Sprintf("%s%s(%s)", a.Negation, a.Predicate, strings.Join(a.Constant, ",")))
+	}
+	sort.Strings(atoms)
+	result, _ := json.Marshal(map[string]any{"ok": ok, "atoms": atoms})
+	fmt.Println(clingoResultTag + string(result))
+	os.Exit(0)
+}
+
+// solveWithClingo runs runClingo on the given rules in a separate process and reports the outcome.
+func solveWithClingo(t *testing.T, semantics clingoSemantics, rules ...[]string) clingoOutcome {
+	t.Helper()
+	requireClingo(t)
+
+	encoded, err := json.Marshal(clingoCase{Rules: rules, Semantics: int(semantics)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestClingoHelperProcess$")
+	cmd.Env = append(os.Environ(), clingoCaseEnv+"="+string(encoded))
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+
+	out := clingoOutcome{stderr: stderr.String()}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		out.exitCode = exitErr.ExitCode()
+	} else if err != nil {
+		t.Fatalf("could not start the helper process: %v", err)
+	}
+	for _, line := range strings.Split(string(stdout), "\n") {
+		if rest, found := strings.CutPrefix(line, clingoResultTag); found {
+			var result struct {
+				Ok    bool
+				Atoms []string
+			}
+			if err := json.Unmarshal([]byte(rest), &result); err != nil {
+				t.Fatalf("bad helper output %q: %v", line, err)
+			}
+			out.returned, out.ok, out.atoms = true, result.Ok, result.Atoms
+		}
+	}
+	if !out.returned && out.exitCode == 0 {
+		t.Fatalf("helper process exited with code 0 but printed no result\nstdout:\n%s\nstderr:\n%s", stdout, out.stderr)
+	}
+	return out
+}
+
+// evenLoop has the two stable models {shape1(c)} and {shape2(c)}.
+var evenLoop = [][]string{
+	{"shape1(c)", "not shape2(c)"},
+	{"shape2(c)", "not shape1(c)"},
+}
+
+// Plan row 1. The plan asks for one model, [a] or [b]; runClingo has no plain mode, and under
+// --enum-mode=brave clingo returns the union of all stable models instead.
+func TestClingoBraveEvenLoop(t *testing.T) {
+	out := solveWithClingo(t, clingoStableBrave, evenLoop...)
+	want := []string{"shape1(c)", "shape2(c)"}
+	if !out.returned || !out.ok || strings.Join(out.atoms, " ") != strings.Join(want, " ") {
+		t.Errorf("expected a model with brave consequences %v, got: %v", want, out)
+	}
+}
+
+// Plan row 2: no atom is in both stable models.
+func TestClingoCautiousEvenLoop(t *testing.T) {
+	out := solveWithClingo(t, clingoStableCautious, evenLoop...)
+	if !out.returned || !out.ok || len(out.atoms) != 0 {
+		t.Errorf("expected a model with no cautious consequences, got: %v", out)
+	}
+}
+
+// Plan row 4: a program without a stable model must be reported as such, and never as a model.
+// runClingo does this by exiting; the plan (phase 2, item 7) wants a returned status instead, at
+// which point the second half of this test should require out.returned.
+func TestClingoUnsatisfiable(t *testing.T) {
+	for _, semantics := range []clingoSemantics{clingoStableBrave, clingoStableCautious} {
+		out := solveWithClingo(t, semantics, []string{"shape1(c)", "not shape1(c)"})
+		if out.returned && out.ok {
+			t.Errorf("semantics %d: an unsatisfiable program was reported as having a model: %v", semantics, out)
+		}
+		if !out.returned && !strings.Contains(out.stderr, "no stable model") {
+			t.Errorf("semantics %d: expected the failure to be reported as \"no stable model\", got: %v", semantics, out)
+		}
+	}
+}
+
+// Plan row 5: an upper-case predicate is a syntax error in clingo. That is an error, not a verdict:
+// it must not look like a model, and it must not look like "no stable model" either.
+func TestClingoSyntaxError(t *testing.T) {
+	out := solveWithClingo(t, clingoStableBrave, []string{"Shape1(a)"})
+	if out.returned && out.ok {
+		t.Fatalf("a program with a syntax error was reported as having a model: %v", out)
+	}
+	if out.returned {
+		t.Errorf("a syntax error is indistinguishable from an empty program: %v", out)
+	}
+	if strings.Contains(out.stderr, "no stable model") {
+		t.Errorf("a syntax error was reported as \"no stable model\": %v", out)
+	}
+	if !strings.Contains(out.stderr, "syntax error") {
+		t.Errorf("expected clingo's syntax error message on stderr, got: %v", out)
+	}
+}
+
+// Plan row 6: a body atom without any rule (a target that was never grounded) is simply false.
+// Clingo warns about it, and about the #show line for a predicate without atoms; neither may break
+// the parsing of the output. The plan runs this without --warn=none, which runClingo always passes.
+func TestClingoUndefinedBodyAtom(t *testing.T) {
+	for _, semantics := range []clingoSemantics{clingoStableBrave, clingoStableCautious} {
+		out := solveWithClingo(t, semantics, []string{"shape1(c)", "shape2(c)"})
+		if !out.returned || !out.ok || len(out.atoms) != 0 {
+			t.Errorf("semantics %d: expected a model without atoms, got: %v", semantics, out)
+		}
+	}
+}
+
+// Plan row 7: a qualified-count program from expandRules together with one even loop has the same
+// number of stable models in clingo as in DLV. The solvers are called directly, since runClingo
+// does not enumerate models.
+func TestClingoModelCountMatchesDLV(t *testing.T) {
+	clingo := requireClingo(t)
+	if _, err := os.Stat(dlv); err != nil {
+		t.Skipf("DLV binary not found at %s", dlv)
+	}
+	resetLPState(t)
+
+	values := []rdf.Term{
+		rdf.Resource{URI: "http://example.com/v0"},
+		rdf.Resource{URI: "http://example.com/v1"},
+	}
+	v0, v1 := rewrite(values[0]), rewrite(values[1])
+
+	// head(focus) holds iff exactly one value node conforms to shape1; shape1(v1) is a fact, and
+	// shape1(v0) is decided by an even loop with shape2(v0).
+	program := serialisedProgram{rules: expandRules(values, []int{0},
+		[]dependency{qual1(1, 1, 1).dependency()}, "head", "focus")}
+	program.rules = append(program.rules,
+		serialisedRule{head: fmt.Sprintf("shape1(%s)", v1)},
+		serialisedRule{head: fmt.Sprintf("shape1(%s)", v0), body: []string{fmt.Sprintf("not shape2(%s)", v0)}},
+		serialisedRule{head: fmt.Sprintf("shape2(%s)", v0), body: []string{fmt.Sprintf("not shape1(%s)", v0)}},
+	)
+	text := program.String()
+
+	dlvCmd := exec.Command(dlv, "-n=0")
+	dlvCmd.Stdin = strings.NewReader(text)
+	dlvOut, err := dlvCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("DLV failed: %v\n%s\nprogram:\n%s", err, dlvOut, text)
+	}
+	var dlvModels, dlvWithHead int
+	for _, line := range strings.Split(string(dlvOut), "\n") {
+		if strings.HasPrefix(line, "{") {
+			dlvModels++
+			if parseDLVSet("M: "+line, "M")["head(focus)"] {
+				dlvWithHead++
+			}
+		}
+	}
+
+	clingoCmd := exec.Command(clingo[0], append(clingo[1:], "--outf=2", "--warn=none", "-n0")...)
+	clingoCmd.Stdin = strings.NewReader(text)
+	var clingoErr strings.Builder
+	clingoCmd.Stderr = &clingoErr
+	clingoOut, _ := clingoCmd.Output() // a native clingo exits with 10, 20 or 30 on success
+	var parsed struct {
+		Call []struct {
+			Witnesses []struct{ Value []string }
+		}
+		Result string
+		Models struct{ Number int }
+	}
+	if err := json.Unmarshal(clingoOut, &parsed); err != nil || parsed.Result != "SATISFIABLE" {
+		t.Fatalf("clingo failed: %v\nstdout:\n%s\nstderr:\n%s\nprogram:\n%s", err, clingoOut, clingoErr.String(), text)
+	}
+	var clingoWithHead int
+	for _, call := range parsed.Call {
+		for _, w := range call.Witnesses {
+			for _, atom := range w.Value {
+				if atom == "head(focus)" {
+					clingoWithHead++
+				}
+			}
+		}
+	}
+
+	if dlvModels != 2 || parsed.Models.Number != 2 {
+		t.Errorf("expected 2 stable models from both solvers, got %d from DLV and %d from clingo\nprogram:\n%s",
+			dlvModels, parsed.Models.Number, text)
+	}
+	if dlvWithHead != 1 || clingoWithHead != 1 {
+		t.Errorf("expected head(focus) in exactly 1 model, got %d from DLV and %d from clingo\nprogram:\n%s",
+			dlvWithHead, clingoWithHead, text)
 	}
 }

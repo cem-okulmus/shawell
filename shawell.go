@@ -474,7 +474,16 @@ func findDepScript() (script, interpreter string, err error) {
 	return "", "", fmt.Errorf("%s not found next to executable or in working directory", name)
 }
 
-func findClingo() ([]string, error) {
+func findClingo(clingoArgument string) ([]string, error) {
+
+	if clingoArgument != "" {
+		if _, err := exec.LookPath(clingoArgument); err == nil {
+			return []string{clingoArgument}, nil
+		} else {
+			log.Panicf("User-defined clingo binary not found: %v", err)
+		}
+	}
+
 	if path, err := exec.LookPath("clingo"); err == nil {
 		return []string{path}, nil
 	}
@@ -510,7 +519,7 @@ func ensureDependencies(needOxigraph bool, needClingo bool) {
 		return err != nil
 	}()
 	clingoMissing := needClingo && func() bool {
-		_, err := findClingo()
+		_, err := findClingo("")
 		return err != nil
 	}()
 
@@ -688,7 +697,14 @@ func main() {
 
 	// For clingo: only needed if semantics is not well-founded and clingo path is not provided explicitly by user.
 	// FindClingo will then be used to deliver the command.
-	ensureDependencies(opts.Local, opts.Semantics != "" && opts.Semantics != "well-founded" && opts.Clingo == "")
+	needClingo := opts.Semantics != "" && opts.Semantics != "well-founded" && opts.Clingo == ""
+	ensureDependencies(opts.Local, needClingo)
+
+	var err error
+	if needClingo {
+		clingoCmd, err = findClingo(opts.Clingo)
+		check(err)
+	}
 
 	shaclDoc, err := os.Open(string(opts.ShaclDoc))
 	check(err)
