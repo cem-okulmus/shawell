@@ -1061,7 +1061,7 @@ func (o clingoOutcome) String() string {
 // requireClingo skips the test when no clingo can be found.
 func requireClingo(t *testing.T) []string {
 	t.Helper()
-	cmd, err := findClingo()
+	cmd, err := findClingo("")
 	if err != nil {
 		t.Skipf("clingo not found: %v", err)
 	}

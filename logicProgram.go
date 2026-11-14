@@ -319,7 +319,7 @@ func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPO
 	}
 
 	args := []string{"--verbose=0", "--quiet=1,2,2", "--warn=none", enumMode}
-	clingoCmd, err := findClingo()
+	clingoCmd, err := findClingo("")
 	check(err)
 
 	shapes := make(map[string]bool)
