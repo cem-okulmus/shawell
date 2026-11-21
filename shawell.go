@@ -955,12 +955,40 @@ func main() {
 	if opts.DataIncluded {
 		basename := filepath.Base(string(opts.ShaclDoc))
 		fileName := strings.TrimSuffix(basename, filepath.Ext(basename))
-		res := endpoint.Insert(g2, "<"+_sh+fileName+">", opts.ReuseData)
-		check(res)
+
+		// under stable-semantics, do not insert shapes tripes into endpoint
+		if opts.Semantics == "stable-brave" || opts.Semantics == "stable-cautious" {
+			var selectedTriples []*rdf.Triple
+			SHACLTerms := GetNodeTerms(g2)
+			shaclTermap := make(map[rdf.Term]bool)
+
+			for _, t := range SHACLTerms {
+				shaclTermap[t] = true
+			}
+
+			for r := range g2.IterTriples() {
+				if shaclTermap[r.Subject] { // skip triples whose subject is a term from shape graph
+					continue
+				}
+				selectedTriples = append(selectedTriples, r)
+			}
+
+			g2ModuloShapes := rdf.NewGraph(_sh)
+
+			for _, t := range selectedTriples {
+				g2ModuloShapes.Add(t)
+			}
+
+			g2 = g2ModuloShapes
+
+		}
+		err := endpoint.Insert(g2, "<"+_sh+fileName+">", opts.ReuseData)
+		check(err)
+
 		graphName = "<" + _sh + fileName + ">"
 	}
 
-	parsedDoc := GetShaclDocument(g2, graphName, opts.Debug)
+	parsedDoc := GetShaclDocument(g2, graphName, opts.Debug, opts.Semantics)
 
 	if opts.DemoOutputLP {
 		demoLP = true

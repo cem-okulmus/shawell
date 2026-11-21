@@ -2971,9 +2971,18 @@ type TargetExpression interface {
 	Target()
 }
 
+// Target all subject and object nodes appearing in the graph
 type TargetDomain struct{}
 
-// new TargetAny type, needed for proper propagation of indirect targets
+func (t TargetDomain) String() string {
+	return "All Domain Targets"
+}
+
+func (t TargetDomain) Target() {}
+
+// TargetAny is the start of an indirect target: any node, followed by the TargetIndirect's
+// indirection path, so it selects every value of that path. It has no query of its own
+// (GetTargetTerm returns ""), so it is only meaningful with a non-nil indirection.
 type TargetAny struct{}
 
 func (t TargetAny) String() string {
@@ -2993,6 +3002,8 @@ func (t TargetIndirect) Target() {}
 func (t TargetIndirect) String() string {
 	var out string
 	switch t.actual.(type) {
+	case TargetDomain:
+		out = "(Domain Target)"
 	case TargetAny:
 		out = "(Any Target)"
 	case TargetSubjectOf:
@@ -3075,6 +3086,8 @@ func ExtractTargetExpression(triple *rdf.Triple) (out TargetExpression, err erro
 func GetTargetTerm(t TargetExpression) string {
 	var queryBody string
 	switch t := t.(type) {
+	case TargetDomain:
+		queryBody = "{ ?sub ?p_dom ?o_dom} UNION {?s_dom ?p_dom ?sub}"
 	case TargetAny:
 		return "" // seems to simple
 	case TargetIndirect:
