@@ -12,12 +12,22 @@ import (
 	rdf "github.com/cem-okulmus/rdf2go-1"
 )
 
+type ValidationStatus int
+
+const (
+	Valid ValidationStatus = iota
+	Invalid
+	NoModel
+	Unknown
+)
+
 type ValidationReport struct {
 	testName    rdf.Term // the top-level name of the test
 	label       rdf.Term // human-readable description of test
 	dataGraph   rdf.Term // location of datagraph info
 	shapesGraph rdf.Term //  location of shapesGraph info
 	conforms    bool
+	status      ValidationStatus
 	results     []ValidationResult // results
 }
 
@@ -2960,6 +2970,8 @@ type TargetExpression interface {
 	String() string
 	Target()
 }
+
+type TargetDomain struct{}
 
 // new TargetAny type, needed for proper propagation of indirect targets
 type TargetAny struct{}

@@ -202,6 +202,8 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 	onlyLP := config.onlyLP
 	onlyQueries := config.onlyQueries
 
+	var status ValidationStatus
+
 	// if onlyLP || onlyQueries {
 	// 	silent = true
 	// }
@@ -255,7 +257,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 
 	if parsedDoc.IsRecursive() || forceLP {
 		if !silent {
-			fmt.Println("Recursive document parsed, tranforming to LP and sending off to DLV.")
+			fmt.Println("Recursive document parsed, transforming to LP and sending off to solver.")
 		}
 
 		var lpUndefinedTables []Table[rdf.Term]
@@ -274,35 +276,201 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 			}
 		}
 
-		start = time.Now()
-		// fmt.Println("Unified LP: ", lp)
-		lpTables, lpUndefinedTables = lp.Answer(debug, false)
-		d = time.Since(start)
-		msec = d.Seconds() * float64(time.Second/time.Millisecond)
-		c.times = append(c.times, labelTime{time: msec, label: "DLV solving"})
+		switch config.semantics {
+		case "well-founded":
+			{
 
-		err := parsedDoc.AdoptLPAnswers(lpTables)
-		check(err)
-		parsedDoc.AdoptLPUndefinedAnswers(lpUndefinedTables)
+				start = time.Now()
+				// fmt.Println("Unified LP: ", lp)
+				lpTables, lpUndefinedTables, _, _ = lp.Answer(debug, false, "well-founded")
+				d = time.Since(start)
+				msec = d.Seconds() * float64(time.Second/time.Millisecond)
+				c.times = append(c.times, labelTime{time: msec, label: "DLV solving"})
 
-		if debug {
-			fmt.Println("Answer from DLV: ")
-			for i := range lpTables {
-				fmt.Println(lpTables[i].Limit(5))
+				err := parsedDoc.AdoptLPAnswers(lpTables)
+				check(err)
+				parsedDoc.AdoptLPUndefinedAnswers(lpUndefinedTables)
+
+				if debug {
+					fmt.Println("Answer from DLV: ")
+					for i := range lpTables {
+						fmt.Println(lpTables[i].Limit(5))
+					}
+				}
+
+				start = time.Now()
+				res, invalidTargets = parsedDoc.ValidateLP(ep)
+				d = time.Since(start)
+				msec = d.Seconds() * float64(time.Second/time.Millisecond)
+				c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from the LP"})
+
+				// for now, we do the same as in non-recursive, will change as phase progresses
+				if res {
+					status = Valid
+				} else {
+					status = Invalid
+				}
+
 			}
+		case "stable-brave":
+			{
+				// first call the LP with targets
+
+				var solveStatus solveStatus
+
+				targetLP := parsedDoc.GetTargetConstraintsLP(ep)
+
+				mergedLP := lp.Merge(targetLP)
+
+				start = time.Now()
+				// fmt.Println("Unified LP: ", lp)
+				lpTables, _, solveStatus, _ = mergedLP.Answer(debug, false, "stable-brave")
+				d = time.Since(start)
+				msec = d.Seconds() * float64(time.Second/time.Millisecond)
+				c.times = append(c.times, labelTime{time: msec, label: "clingo solving - brave call 1"})
+
+				if solveStatus != unsatisfiable {
+
+					if solveStatus == unknown {
+						status = Unknown
+
+					} else {
+
+						err := parsedDoc.AdoptLPAnswers(lpTables)
+						check(err)
+
+						if debug {
+							fmt.Println("Answer from Clingo: ")
+							for i := range lpTables {
+								fmt.Println(lpTables[i].Limit(5))
+							}
+						}
+
+						start = time.Now()
+						res, invalidTargets = parsedDoc.ValidateLP(ep)
+						d = time.Since(start)
+						msec = d.Seconds() * float64(time.Second/time.Millisecond)
+						c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from the LP"})
+
+						if !res {
+							log.Panicln("Found brave model that matches targets, but coudn't validate LP!")
+						}
+
+						status = Valid
+					}
+
+				} else { // next, if first call was unsatisfiable, run program without targets to see if there is any stable model at all
+					start = time.Now()
+					// fmt.Println("Unified LP: ", lp)
+					lpTables, _, solveStatus, _ = lp.Answer(debug, false, "stable-brave")
+					d = time.Since(start)
+					msec = d.Seconds() * float64(time.Second/time.Millisecond)
+					c.times = append(c.times, labelTime{time: msec, label: "clingo solving - brave call 2"})
+
+					// no need to run AdoptLPAnswers and ValidateLP if no model was found
+					if solveStatus == satisfiable {
+						err := parsedDoc.AdoptLPAnswers(lpTables)
+						check(err)
+
+						if debug {
+							fmt.Println("Answer from Clingo: ")
+							for i := range lpTables {
+								fmt.Println(lpTables[i].Limit(5))
+							}
+						}
+
+						start = time.Now()
+						res, invalidTargets = parsedDoc.ValidateLP(ep)
+						d = time.Since(start)
+						msec = d.Seconds() * float64(time.Second/time.Millisecond)
+						c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from the LP"})
+					}
+
+					if res {
+						log.Panicln("Found brave model without target constraint, but it validated the targets !?")
+					}
+
+					switch solveStatus {
+					case unsatisfiable:
+						status = NoModel
+					case satisfiable:
+						status = Invalid
+					default:
+						status = Unknown
+					}
+
+				}
+
+			}
+		case "stable-cautious":
+			{
+				var solveStatus solveStatus
+				var complete bool
+
+				start = time.Now()
+				// fmt.Println("Unified LP: ", lp)
+				lpTables, lpUndefinedTables, solveStatus, complete = lp.Answer(debug, false, "stable-cautious")
+				d = time.Since(start)
+				msec = d.Seconds() * float64(time.Second/time.Millisecond)
+				c.times = append(c.times, labelTime{time: msec, label: "clingo solving"})
+
+				// no need to run AdoptLPAnswers and ValidateLP if no model was found
+				if solveStatus == satisfiable {
+					err := parsedDoc.AdoptLPAnswers(lpTables)
+					check(err)
+
+					if debug {
+						fmt.Println("Answer from clingo: ")
+						for i := range lpTables {
+							fmt.Println(lpTables[i].Limit(5))
+						}
+					}
+
+					start = time.Now()
+					res, invalidTargets = parsedDoc.ValidateLP(ep)
+					d = time.Since(start)
+					msec = d.Seconds() * float64(time.Second/time.Millisecond)
+					c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from the LP"})
+				}
+
+				// if res != (solveStatus == satisfiable) {
+				// 	log.Panicln("Mismatch between res and satisfiable result in stable cautious branch")
+				// }
+
+				// determine outcome based on solveStatus, res and complete
+				switch {
+				// case solveStatus == satisfiable:
+				// 	status = Valid
+				case solveStatus == unsatisfiable:
+					status = NoModel
+				case solveStatus == unknown:
+					status = Unknown
+				case !res:
+					status = Invalid
+				case complete:
+					status = Valid
+				default:
+					status = Unknown
+				}
+
+			}
+		default:
+			log.Panicln("Unknown/Unimplemented semantics: ", config.semantics)
 		}
 
-		start = time.Now()
-		res, invalidTargets = parsedDoc.ValidateLP(ep)
-		d = time.Since(start)
-		msec = d.Seconds() * float64(time.Second/time.Millisecond)
-		c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from DLV"})
 	} else {
 		start := time.Now()
 		res, invalidTargets = parsedDoc.Validate(ep)
 		d := time.Since(start)
 		msec := d.Seconds() * float64(time.Second/time.Millisecond)
 		c.times = append(c.times, labelTime{time: msec, label: "Unwinding acyclic cond. tables"})
+
+		// in non-recursive case, we can set the status directly based on the validation result
+		if res {
+			status = Valid
+		} else {
+			status = Invalid
+		}
 	}
 
 	if !silent {
@@ -315,15 +483,22 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 
 	green := color.New(color.FgGreen)
 	red := color.New(color.FgRed)
+	magenta := color.New(color.FgMagenta)
+	yellow := color.New(color.BgYellow)
 
 	if !silent {
 		fmt.Println("----------------------------------")
 		fmt.Println("RESULT: --------------------------")
 
-		if res {
+		switch status {
+		case Valid:
 			fmt.Println("Shacl Document valid: ", green.Sprint(res))
-		} else {
+		case Invalid:
 			fmt.Println("Shacl Document valid: ", red.Sprint(res))
+		case NoModel:
+			fmt.Println("Shacl Document valid: ", magenta.Sprint("No model found"))
+		case Unknown:
+			fmt.Println("Shacl Document valid: ", yellow.Sprint("Unknown"))
 		}
 
 		fmt.Println("----------------------------------")
@@ -332,13 +507,15 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 
 	// fmt.Println("ValidationResult in XML form: ")
 
-	actual := &ValidationReport{conforms: res}
+	actual := &ValidationReport{conforms: status == Valid}
+	actual.status = status
 	var reports []ValidationResult
 
 	allValid := true
 
 	if !omitVR {
 		actual = &ValidationReport{}
+		actual.status = status
 
 		start = time.Now()
 		for _, v := range parsedDoc.shapeNames {
@@ -435,6 +612,7 @@ type config struct {
 	onlyLP      bool
 	onlyQueries bool
 	timer       bool
+	semantics   string
 }
 
 // binaryExists reports whether the binary at path is reachable — stat for paths
@@ -593,7 +771,7 @@ type cliOptions struct {
 	Timer             bool           `            long:"timer"             description:"Print time composition after validation."`
 	Completion        string         `short:"c" long:"completion"         description:"Output a shell completion setup script and exit." choice:"bash" choice:"zsh" choice:"fish"`
 	Clingo            string         `long:"clingo"             description:"The location of the clingo binary used to evaluate recursive SHACL."`
-	Semantics         string         `short:"m" long:"semantics"          description:"The semantics to use for recursive SHACL evaluation. Choices are:'well-founded', 'stable-brave' and 'stable-cautious'."`
+	Semantics         string         `short:"m" long:"semantics" description:"The semantics to use for recursive SHACL evaluation." choice:"well-founded" choice:"stable-brave" choice:"stable-cautious" default:"well-founded"`
 }
 
 // printCompletion outputs the one-liner shell setup that hooks shawell into the shell's
@@ -697,8 +875,8 @@ func main() {
 
 	// For clingo: only needed if semantics is not well-founded and clingo path is not provided explicitly by user.
 	// FindClingo will then be used to deliver the command.
-	needClingo := opts.Semantics != "" && opts.Semantics != "well-founded" && opts.Clingo == ""
-	ensureDependencies(opts.Local, needClingo)
+	needClingo := opts.Semantics != "well-founded"
+	ensureDependencies(opts.Local, needClingo && opts.Clingo == "")
 
 	var err error
 	if needClingo {
@@ -710,8 +888,16 @@ func main() {
 	check(err)
 	defer shaclDoc.Close()
 
+	// Until later phase, set omitVR when under stable semantics, since the VR generation is not yet implemented for that case.
+	if opts.Semantics != "well-founded" {
+		if opts.OutputVR != "" {
+			fmt.Fprintln(os.Stderr, "Validation reports are not yet supported under stable semantics; no report is written.")
+		}
+		opts.OmitVR = true
+	}
+
 	var vrOutFile *os.File
-	if opts.OutputVR != "" {
+	if !opts.OmitVR && opts.OutputVR != "" {
 		vrOutFile, err = os.OpenFile(string(opts.OutputVR), os.O_CREATE|os.O_WRONLY, 0o644)
 		check(err)
 		defer vrOutFile.Close()
@@ -803,10 +989,24 @@ func main() {
 		onlyLP:      opts.DemoOutputLP,
 		onlyQueries: opts.DemoOutputQueries,
 		timer:       opts.Timer,
+		semantics:   opts.Semantics,
 	}
 
 	// Main Routine
-	answerShacl(endpoint, parsedDoc, config)
+	vr := answerShacl(endpoint, parsedDoc, config)
+
+	if !vr.conforms {
+		switch vr.status {
+		case Valid:
+			log.Panicln("Produced non-conforming VR with Valid ValidationStatus!")
+		case Invalid:
+			exitCode = 3
+		case NoModel:
+			exitCode = 4
+		case Unknown:
+			exitCode = 5
+		}
+	}
 
 	// If needed, clean up the named graph afterwards
 	if opts.DataIncluded && !opts.ReuseData {

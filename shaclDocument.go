@@ -1307,7 +1307,12 @@ func (s *ShaclDocument) ValidateLP(ep endpoint) (bool, map[string]Table[rdf.Term
 
 // AdoptLPAnswers takes the computed answers from the logic program and populates
 // uncondAnswers with per-shape unary tables. LPTables rows are [predicate, node] pairs.
+// Note: this function assumes that UnwindAnswer has not been called during the same run
 func (s *ShaclDocument) AdoptLPAnswers(LPTables []Table[rdf.Term]) error {
+
+	// clear uncondAnswers (in case a previous call populated them)
+	clear(s.uncondAnswers)
+
 	predRows := make(map[string][]rdf.Term)
 	for _, t := range LPTables {
 		for row := range t.IterRows() {
@@ -1349,6 +1354,10 @@ func (s *ShaclDocument) AdoptLPAnswers(LPTables []Table[rdf.Term]) error {
 // AdoptLPUndefinedAnswers populates undefinedAnswers from the Undefined set of a DLV well-founded model.
 // Nodes whose shape membership is undefined are excluded from the "invalid target" list in InvalidTargetLP.
 func (s *ShaclDocument) AdoptLPUndefinedAnswers(LPTables []Table[rdf.Term]) {
+
+	// clear undefinedAnswers (in case a previous call populated them)
+	clear(s.undefinedAnswers)
+
 	predRows := make(map[string][]rdf.Term)
 	for _, t := range LPTables {
 		for row := range t.IterRows() {

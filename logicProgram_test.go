@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -615,7 +617,7 @@ func validateDocument(t *testing.T, ep *SparqlEndpoint, name, turtle string, for
 
 	doc := GetShaclDocument(g, graphName, false)
 	activeDoc = &doc
-	report := answerShacl(ep, doc, config{silent: true, forceLP: forceLP})
+	report := answerShacl(ep, doc, config{silent: true, forceLP: forceLP, semantics: "well-founded"})
 	return report.conforms
 }
 
@@ -1027,9 +1029,9 @@ ex:n1 ex:p ex:n2 .
 
 // The tests below are those of step 1.8 of stable_semantics_plan.md, written against runClingo as
 // it is implemented: it takes a semantics instead of free flags, shows the shapeN/1 atoms only, and
-// reports "no model" and solver errors by terminating the process. Each case therefore runs
-// runClingo in a copy of the test binary (TestClingoHelperProcess), so that an exit or a panic
-// becomes an observable outcome instead of ending the test run.
+// returns a solveStatus and whether the search was complete. Solver errors still end the process,
+// so each case runs runClingo in a copy of the test binary (TestClingoHelperProcess), so that an
+// exit or a panic becomes an observable outcome instead of ending the test run.
 
 const (
 	clingoCaseEnv   = "SHAWELL_CLINGO_CASE"
@@ -1040,20 +1042,34 @@ const (
 type clingoCase struct {
 	Rules     [][]string // each rule as head followed by its body atoms
 	Semantics int
+	ExtraArgs []string // appended to every clingo call, through a wrapper script (Unix only)
 }
 
 // clingoOutcome is what the helper process did with a clingoCase.
 type clingoOutcome struct {
-	returned bool     // runClingo came back, as opposed to ending the process
-	ok       bool     // the second return value of runClingo
-	atoms    []string // the true atoms, sorted, e.g. "shape1(c)"
+	returned bool        // runClingo came back, as opposed to ending the process
+	status   solveStatus // the second return value of runClingo
+	complete bool        // the third return value of runClingo
+	atoms    []string    // the true atoms, sorted, e.g. "shape1(c)"
 	exitCode int
 	stderr   string
 }
 
+func statusName(s solveStatus) string {
+	switch s {
+	case satisfiable:
+		return "satisfiable"
+	case unsatisfiable:
+		return "unsatisfiable"
+	case unknown:
+		return "unknown"
+	}
+	return fmt.Sprintf("solveStatus(%d)", int(s))
+}
+
 func (o clingoOutcome) String() string {
 	if o.returned {
-		return fmt.Sprintf("returned ok=%v atoms=%v", o.ok, o.atoms)
+		return fmt.Sprintf("returned status=%s complete=%v atoms=%v", statusName(o.status), o.complete, o.atoms)
 	}
 	return fmt.Sprintf("process ended with exit code %d\nstderr:\n%s", o.exitCode, o.stderr)
 }
@@ -1068,6 +1084,39 @@ func requireClingo(t *testing.T) []string {
 	return cmd
 }
 
+// installClingoWrapper puts a script named clingo in front of PATH that runs the real clingo with
+// extra appended to its arguments, and points clingoCmd at it as well. runClingo has no way to pass
+// extra flags, and findClingo checks PATH first, so this is how a test imposes --time-limit or -n.
+func installClingoWrapper(t *testing.T, extra []string) {
+	t.Helper()
+	real, err := findClingo("")
+	if err != nil {
+		t.Fatalf("clingo not found: %v", err)
+	}
+	if strings.ContainsRune(real[0], filepath.Separator) {
+		if real[0], err = filepath.Abs(real[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	var line []string
+	for _, s := range real {
+		line = append(line, quote(s))
+	}
+	line = append(line, `"$@"`)
+	for _, s := range extra {
+		line = append(line, quote(s))
+	}
+	dir := t.TempDir()
+	wrapper := filepath.Join(dir, "clingo")
+	script := "#!/bin/sh\nexec " + strings.Join(line, " ") + "\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	clingoCmd = []string{wrapper}
+}
+
 // TestClingoHelperProcess is not a test: it is the body of the process started by solveWithClingo.
 func TestClingoHelperProcess(t *testing.T) {
 	encoded := os.Getenv(clingoCaseEnv)
@@ -1079,19 +1128,30 @@ func TestClingoHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stderr, "bad clingo case:", err)
 		os.Exit(3)
 	}
+	// runClingo uses the global clingoCmd, which main sets; the test binary has to set it itself.
+	if len(c.ExtraArgs) > 0 {
+		installClingoWrapper(t, c.ExtraArgs)
+	} else {
+		cmd, err := findClingo("")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "clingo not found:", err)
+			os.Exit(3)
+		}
+		clingoCmd = cmd
+	}
 	var program serialisedProgram
 	for _, r := range c.Rules {
 		program.rules = append(program.rules, serialisedRule{head: r[0], body: r[1:]})
 	}
 
-	out, ok := program.runClingo(false, clingoSemantics(c.Semantics))
+	out, status, complete := program.runClingo(false, clingoSemantics(c.Semantics))
 
 	atoms := []string{}
 	for _, a := range out.Answers {
 		atoms = append(atoms, fmt.Sprintf("%s%s(%s)", a.Negation, a.Predicate, strings.Join(a.Constant, ",")))
 	}
 	sort.Strings(atoms)
-	result, _ := json.Marshal(map[string]any{"ok": ok, "atoms": atoms})
+	result, _ := json.Marshal(map[string]any{"status": int(status), "complete": complete, "atoms": atoms})
 	fmt.Println(clingoResultTag + string(result))
 	os.Exit(0)
 }
@@ -1099,9 +1159,18 @@ func TestClingoHelperProcess(t *testing.T) {
 // solveWithClingo runs runClingo on the given rules in a separate process and reports the outcome.
 func solveWithClingo(t *testing.T, semantics clingoSemantics, rules ...[]string) clingoOutcome {
 	t.Helper()
-	requireClingo(t)
+	return solveWithClingoArgs(t, semantics, nil, rules...)
+}
 
-	encoded, err := json.Marshal(clingoCase{Rules: rules, Semantics: int(semantics)})
+// solveWithClingoArgs is solveWithClingo with extra clingo arguments, e.g. --time-limit=1.
+func solveWithClingoArgs(t *testing.T, semantics clingoSemantics, extra []string, rules ...[]string) clingoOutcome {
+	t.Helper()
+	requireClingo(t)
+	if len(extra) > 0 && runtime.GOOS == "windows" {
+		t.Skip("extra clingo arguments need a shell wrapper script")
+	}
+
+	encoded, err := json.Marshal(clingoCase{Rules: rules, Semantics: int(semantics), ExtraArgs: extra})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1121,13 +1190,15 @@ func solveWithClingo(t *testing.T, semantics clingoSemantics, rules ...[]string)
 	for _, line := range strings.Split(string(stdout), "\n") {
 		if rest, found := strings.CutPrefix(line, clingoResultTag); found {
 			var result struct {
-				Ok    bool
-				Atoms []string
+				Status   int
+				Complete bool
+				Atoms    []string
 			}
 			if err := json.Unmarshal([]byte(rest), &result); err != nil {
 				t.Fatalf("bad helper output %q: %v", line, err)
 			}
-			out.returned, out.ok, out.atoms = true, result.Ok, result.Atoms
+			out.returned = true
+			out.status, out.complete, out.atoms = solveStatus(result.Status), result.Complete, result.Atoms
 		}
 	}
 	if !out.returned && out.exitCode == 0 {
@@ -1142,51 +1213,50 @@ var evenLoop = [][]string{
 	{"shape2(c)", "not shape1(c)"},
 }
 
-// Plan row 1. The plan asks for one model, [a] or [b]; runClingo has no plain mode, and under
-// --enum-mode=brave clingo returns the union of all stable models instead.
+// pigeonhole has no stable model, and clingo needs far more than a second to prove that (12
+// pigeons, 11 holes). shape1(k) is shown so that the program has a #show line.
+var pigeonhole = [][]string{
+	{"pigeon(1..12)"},
+	{"hole(1..11)"},
+	{"shape1(k)"},
+	{"{ at(P,H) : hole(H) } = 1", "pigeon(P)"},
+	{"", "at(P1,H)", "at(P2,H)", "P1<P2"},
+}
+
+// Plan row 1: brave runs without a mode flag, so clingo stops at the first model, and that model is
+// exactly one of the two. complete is not checked: "Models : 1+" is normal here.
 func TestClingoBraveEvenLoop(t *testing.T) {
 	out := solveWithClingo(t, clingoStableBrave, evenLoop...)
-	want := []string{"shape1(c)", "shape2(c)"}
-	if !out.returned || !out.ok || strings.Join(out.atoms, " ") != strings.Join(want, " ") {
-		t.Errorf("expected a model with brave consequences %v, got: %v", want, out)
+	got := strings.Join(out.atoms, " ")
+	if !out.returned || out.status != satisfiable || (got != "shape1(c)" && got != "shape2(c)") {
+		t.Errorf("expected one model, [shape1(c)] or [shape2(c)], got: %v", out)
 	}
 }
 
-// Plan row 2: no atom is in both stable models.
+// Plan row 2: no atom is in both stable models, and the search is exhausted.
 func TestClingoCautiousEvenLoop(t *testing.T) {
 	out := solveWithClingo(t, clingoStableCautious, evenLoop...)
-	if !out.returned || !out.ok || len(out.atoms) != 0 {
-		t.Errorf("expected a model with no cautious consequences, got: %v", out)
+	if !out.returned || out.status != satisfiable || !out.complete || len(out.atoms) != 0 {
+		t.Errorf("expected a complete run with no cautious consequences, got: %v", out)
 	}
 }
 
-// Plan row 4: a program without a stable model must be reported as such, and never as a model.
-// runClingo does this by exiting; the plan (phase 2, item 7) wants a returned status instead, at
-// which point the second half of this test should require out.returned.
+// Plan row 4: a program without a stable model is reported as unsatisfiable, never as a model.
 func TestClingoUnsatisfiable(t *testing.T) {
 	for _, semantics := range []clingoSemantics{clingoStableBrave, clingoStableCautious} {
 		out := solveWithClingo(t, semantics, []string{"shape1(c)", "not shape1(c)"})
-		if out.returned && out.ok {
-			t.Errorf("semantics %d: an unsatisfiable program was reported as having a model: %v", semantics, out)
-		}
-		if !out.returned && !strings.Contains(out.stderr, "no stable model") {
-			t.Errorf("semantics %d: expected the failure to be reported as \"no stable model\", got: %v", semantics, out)
+		if !out.returned || out.status != unsatisfiable || !out.complete {
+			t.Errorf("semantics %d: expected a complete unsatisfiable run, got: %v", semantics, out)
 		}
 	}
 }
 
 // Plan row 5: an upper-case predicate is a syntax error in clingo. That is an error, not a verdict:
-// it must not look like a model, and it must not look like "no stable model" either.
+// it must not look like a model, like "no stable model", or like an interrupted run.
 func TestClingoSyntaxError(t *testing.T) {
 	out := solveWithClingo(t, clingoStableBrave, []string{"Shape1(a)"})
-	if out.returned && out.ok {
-		t.Fatalf("a program with a syntax error was reported as having a model: %v", out)
-	}
 	if out.returned {
-		t.Errorf("a syntax error is indistinguishable from an empty program: %v", out)
-	}
-	if strings.Contains(out.stderr, "no stable model") {
-		t.Errorf("a syntax error was reported as \"no stable model\": %v", out)
+		t.Fatalf("a syntax error was returned as a solver result instead of an error: %v", out)
 	}
 	if !strings.Contains(out.stderr, "syntax error") {
 		t.Errorf("expected clingo's syntax error message on stderr, got: %v", out)
@@ -1199,9 +1269,55 @@ func TestClingoSyntaxError(t *testing.T) {
 func TestClingoUndefinedBodyAtom(t *testing.T) {
 	for _, semantics := range []clingoSemantics{clingoStableBrave, clingoStableCautious} {
 		out := solveWithClingo(t, semantics, []string{"shape1(c)", "shape2(c)"})
-		if !out.returned || !out.ok || len(out.atoms) != 0 {
+		if !out.returned || out.status != satisfiable || len(out.atoms) != 0 {
 			t.Errorf("semantics %d: expected a model without atoms, got: %v", semantics, out)
 		}
+	}
+}
+
+// The empty program has exactly one stable model, the empty one; runClingo answers without clingo.
+func TestClingoEmptyProgram(t *testing.T) {
+	for _, semantics := range []clingoSemantics{clingoStableBrave, clingoStableCautious} {
+		out := solveWithClingo(t, semantics)
+		if !out.returned || out.status != satisfiable || !out.complete || len(out.atoms) != 0 {
+			t.Errorf("semantics %d: expected a complete run with the empty model, got: %v", semantics, out)
+		}
+	}
+}
+
+// Cautious stopped after the first model (-n1): deterministic, and the "Models : 1+" summary must
+// come back as an incomplete run. The candidate set is then only an upper bound.
+func TestClingoCautiousIncomplete(t *testing.T) {
+	out := solveWithClingoArgs(t, clingoStableCautious, []string{"-n1"}, evenLoop...)
+	if !out.returned || out.status != satisfiable || out.complete || len(out.atoms) != 1 {
+		t.Errorf("expected an incomplete run with one candidate atom, got: %v", out)
+	}
+}
+
+// Cautious interrupted by the time limit after its first model: shape1(k) is found at once, and
+// refuting it needs the pigeonhole proof. Clingo reports SATISFIABLE; only "Models : 1+" shows that
+// the candidate set may still be too large.
+func TestClingoCautiousTimeLimit(t *testing.T) {
+	rules := [][]string{
+		{"pigeon(1..12)"},
+		{"hole(1..11)"},
+		{"{aux(k)}"},
+		{"shape1(k)", "not aux(k)"},
+		{"{ at(P,H) : hole(H) } = 1", "pigeon(P)", "aux(k)"},
+		{"", "at(P1,H)", "at(P2,H)", "P1<P2"},
+	}
+	out := solveWithClingoArgs(t, clingoStableCautious, []string{"--time-limit=1"}, rules...)
+	if !out.returned || out.status != satisfiable || out.complete {
+		t.Errorf("expected a satisfiable but incomplete run, got: %v", out)
+	}
+}
+
+// Brave interrupted before any model is found: unknown, which phase 2 turns into the Unknown
+// verdict. It must neither end the process nor look like "no model".
+func TestClingoBraveTimeLimit(t *testing.T) {
+	out := solveWithClingoArgs(t, clingoStableBrave, []string{"--time-limit=1"}, pigeonhole...)
+	if !out.returned || out.status != unknown || out.complete {
+		t.Errorf("expected an unknown, incomplete run, got: %v", out)
 	}
 }
 

@@ -118,6 +118,14 @@ type serialisedProgram struct {
 	rules []serialisedRule
 }
 
+func (p serialisedProgram) Merge(other serialisedProgram) (out serialisedProgram) {
+	out.rules = make([]serialisedRule, len(p.rules))
+	copy(out.rules, p.rules)
+
+	out.rules = append(out.rules, other.rules...)
+	return out
+}
+
 // IsEmpty returns true if the logic program contains no rules.
 func (p serialisedProgram) IsEmpty() bool {
 	return len(p.rules) == 0
@@ -284,9 +292,21 @@ const (
 	clingoStableCautious
 )
 
+type solveStatus int
+
+const (
+	satisfiable solveStatus = iota
+	unsatisfiable
+	unknown
+)
+
 type ClingoOutput struct {
-	Answers []LPAnswer `parser:" @@* "`
-	Status  string     `parser:" @(\"SATISFIABLE\" | \"UNSATISFIABLE\" | \"UNKNOWN\") "`
+	Answers   []LPAnswer `parser:" ( !(\"Answer:\" | \"SATISFIABLE\" | \"UNSATISFIABLE\" | \"UNKNOWN\" | \"OPTIMUM\") )* ( \"Answer:\" (Number|Ident) \"(\" (!\")\")* \")\" @@* )? "`
+	Status    string     `parser:" @(\"SATISFIABLE\" | \"UNSATISFIABLE\" | \"UNKNOWN\" | \"OPTIMUM\" \"FOUND\") "`
+	TimeLimit bool       `parser:" @(\"TIME\" \"LIMIT\")? ( !\"Models\" )* "`
+	Models    string     `parser:" \"Models\" \":\" @(Number|Ident) "`
+	Rest      []string   `parser:" ( !\"\" )* "`
+	Complete  bool
 }
 
 var graphLexer = lexer.Must(ebnf.New(`
@@ -304,23 +324,21 @@ var graphLexer = lexer.Must(ebnf.New(`
 
 // runClingo invokes Clingo under the specified semantics and returns the parsed output.
 // When debug is true the raw Clingo output is printed, passed through DecodedString.
-func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPOutput, bool) {
+func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPOutput, solveStatus, bool) {
 	if p.IsEmpty() {
-		return LPOutput{}, false
+		return LPOutput{}, satisfiable, true
 	}
 
-	var enumMode string
-
+	var args []string
 	switch semantics {
 	case clingoStableBrave:
-		enumMode = "" // do not use enum mode brave, since we need a single model to satisfy all targets
+		args = []string{"--verbose=1", "--quiet=1,2,2", "--warn=none"} // do not use enum mode brave, since we need a single model to satisfy all targets
 	case clingoStableCautious:
-		enumMode = "--enum-mode=cautious"
+		args = []string{"--verbose=1", "--quiet=1,2,2", "--warn=none", "--enum-mode=cautious"}
 	}
 
-	args := []string{"--verbose=0", "--quiet=1,2,2", "--warn=none", enumMode}
-	clingoCmd, err := findClingo("")
-	check(err)
+	// clingoCmd, err := findClingo("")
+	// check(err)
 
 	shapes := make(map[string]bool)
 	// determine the list of shape atoms to pass to clingo as show lines
@@ -369,26 +387,34 @@ func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPO
 		log.Panicln("input for parser: ", outString, "\n \n", err)
 	}
 
+	parsedClingoOutput.Complete = !strings.HasSuffix(parsedClingoOutput.Models, "+")
+
+	var solveStatus solveStatus
+
 	if strings.Contains(parsedClingoOutput.Status, "UNSATISFIABLE") {
-		fmt.Fprintln(os.Stderr, "Clingo semantic error: the logic program is incoherent or no stable model exists.")
-		fmt.Fprintln(os.Stderr, "Clingo output:\n", outString)
-		os.Exit(1)
+		solveStatus = unsatisfiable
 	} else if strings.Contains(parsedClingoOutput.Status, "UNKNOWN") {
-		fmt.Fprintln(os.Stderr, "Clingo failed: \n", stderr.String())
-		fmt.Fprintln(os.Stderr, "Clingo output:\n", outString)
-		os.Exit(1)
+		if !parsedClingoOutput.TimeLimit { // a syntax error or similar, not an interrupted search
+			fmt.Fprintln(os.Stderr, "Clingo failed:\n", stderr.String())
+			os.Exit(1)
+		}
+		solveStatus = unknown
+	} else if strings.Contains(parsedClingoOutput.Status, "SATISFIABLE") {
+		solveStatus = satisfiable
+	} else { // unrecognised SATUS
+		log.Panicln("Got unrecognised STATUS from clingo: ", parsedClingoOutput.Status)
 	}
 
 	return LPOutput{
 		Answers: parsedClingoOutput.Answers,
-	}, true
+	}, solveStatus, parsedClingoOutput.Complete
 }
 
 // runDLV invokes DLV under well-founded semantics and returns the parsed output.
 // When debug is true the raw DLV output is printed, passed through DecodedString.
-func (p serialisedProgram) runDLV(debug bool, nofacts bool) (LPOutput, bool) {
+func (p serialisedProgram) runDLV(debug bool, nofacts bool) LPOutput {
 	if p.IsEmpty() {
-		return LPOutput{}, false
+		return LPOutput{}
 	}
 
 	args := []string{"--wellfounded"}
@@ -433,17 +459,33 @@ func (p serialisedProgram) runDLV(debug bool, nofacts bool) (LPOutput, bool) {
 		log.Panicln("input for parser: ", outString, "\n \n", err)
 	}
 
-	return parsedDLVOutput, true
+	return parsedDLVOutput
 }
 
 // Answer sends the logic program to DLV configured for well-founded semantics and returns the computed interpretation.
 // Returns (true tables, undefined tables), each grouped by predicate arity.
-func (p serialisedProgram) Answer(debug bool, nofacts bool) ([]Table[rdf.Term], []Table[rdf.Term]) {
-	out, ok := p.runDLV(debug, nofacts)
-	if !ok {
-		return []Table[rdf.Term]{}, []Table[rdf.Term]{}
+func (p serialisedProgram) Answer(debug bool, nofacts bool, semantics string) ([]Table[rdf.Term], []Table[rdf.Term], solveStatus, bool) {
+
+	var out LPOutput
+	var solveStatus solveStatus
+	var complete bool
+	switch semantics {
+	case "well-founded":
+		out = p.runDLV(debug, nofacts)
+		complete = true
+		solveStatus = satisfiable
+	case "stable-brave":
+		out, solveStatus, complete = p.runClingo(debug, clingoStableBrave)
+	case "stable-cautious":
+		out, solveStatus, complete = p.runClingo(debug, clingoStableCautious)
+	default:
+		log.Panicln("Unknown semantics or not yet implemented: ", semantics)
 	}
-	return out.ToTables(), out.UndefinedToTables()
+
+	if p.IsEmpty() {
+		return []Table[rdf.Term]{}, []Table[rdf.Term]{}, solveStatus, complete
+	}
+	return out.ToTables(), out.UndefinedToTables(), solveStatus, complete
 }
 
 // String returns a string representation of the logic program with all rules.
@@ -985,6 +1027,31 @@ func (s ShaclDocument) GetAllLPs() (out serialisedProgram) {
 		// fmt.Println("For shape ", value.GetQualName(), " I got the program ", outTmp, "  with ", len(outTmp.rules))
 
 		out.rules = append(out.rules, outTmp.rules...)
+	}
+
+	return out
+}
+
+// GetTargetConstraintsLP generates a logic program encoding all constraints for all target shapes in the document.
+// For every target atom t, it will add a rule of the form :- not t. to ensure that the target is satisfied in the stable model.
+func (s ShaclDocument) GetTargetConstraintsLP(ep endpoint) (out serialisedProgram) {
+
+	s.MaterialiseTargets(ep)
+
+	for name, value := range s.shapeNames {
+
+		// ignore shapes set to inactive, as they should be ignored for the purpose of validation
+		if !value.IsActive() {
+			continue
+		}
+
+		targetTable := s.targets[name]
+
+		// this may produce dupliate entries, but that will not affect the logic program, since duplicates are ignored by the solver
+		for row := range targetTable.IterRows() {
+			out.rules = append(out.rules, serialisedRule{head: "", body: []string{fmt.Sprint("not ", value.GetLogName(), "(", rewrite(row[0]), ")")}})
+		}
+
 	}
 
 	return out

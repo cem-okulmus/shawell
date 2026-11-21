@@ -664,7 +664,7 @@ func shawellInvalid(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP 
 	var tables map[string]Table[rdf.Term]
 	if forceLP || doc.IsRecursive() {
 		lp := doc.GetAllLPs()
-		lpTables, undefined := lp.Answer(false, false)
+		lpTables, undefined, _, _ := lp.Answer(false, false, "well-founded")
 		if err := doc.AdoptLPAnswers(lpTables); err != nil {
 			panic(err)
 		}
@@ -693,7 +693,7 @@ func shawellReport(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP b
 	defer func() { err = recover() }()
 	doc := GetShaclDocument(g, graphName, false)
 	activeDoc = &doc
-	return answerShacl(ep, doc, config{silent: true, forceLP: forceLP}), nil
+	return answerShacl(ep, doc, config{silent: true, forceLP: forceLP, semantics: "well-founded"}), nil
 }
 
 // noPanic runs f and returns a recovered panic, if any.

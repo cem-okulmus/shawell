@@ -343,6 +343,7 @@ func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEn
 			forceLP:     forceLP,
 			onlyLP:      false,
 			onlyQueries: false,
+			semantics:   "well-founded",
 		}
 
 		actual := answerShacl(ep, parsedDoc, config)
