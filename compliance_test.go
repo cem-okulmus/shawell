@@ -262,7 +262,7 @@ func Compliance(t *testing.T, forceLP bool) EARLReport {
 		return EARLReport{}
 	}
 
-	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: GraphDB 10.3.3")
+	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: GraphDB 11.5.3")
 }
 
 func ComplianceOxigraph(t *testing.T, forceLP bool) EARLReport {
@@ -331,7 +331,7 @@ func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEn
 		res := ep.Insert(g2, "<"+_sh+fileName+">", false)
 		check(res)
 		graphName = "<" + _sh + fileName + ">"
-		parsedDoc := GetShaclDocument(g2, graphName, false)
+		parsedDoc := GetShaclDocument(g2, graphName, false, "well-founded")
 		parsedDoc.debug = false
 		activeDoc = &parsedDoc
 

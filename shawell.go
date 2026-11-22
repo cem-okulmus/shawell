@@ -814,6 +814,19 @@ complete -c shawell -a '(_shawell_complete)' -f
 	}
 }
 
+func SHACLPredicate(predicate rdf.Term) bool {
+
+	// sh:  type predicate
+	if strings.HasPrefix(predicate.RawValue(), _sh) {
+		return true
+	}
+	if predicate.RawValue() == _rdf+"first" || predicate.RawValue() == _rdf+"rest" {
+		return true
+	}
+
+	return false
+}
+
 func main() {
 	// ==============================================
 	// Command-Line Argument Parsing
@@ -956,20 +969,40 @@ func main() {
 		basename := filepath.Base(string(opts.ShaclDoc))
 		fileName := strings.TrimSuffix(basename, filepath.Ext(basename))
 
+		insertGraph := g2
 		// under stable-semantics, do not insert shapes tripes into endpoint
 		if opts.Semantics == "stable-brave" || opts.Semantics == "stable-cautious" {
 			var selectedTriples []*rdf.Triple
-			SHACLTerms := GetNodeTerms(g2)
-			shaclTermap := make(map[rdf.Term]bool)
+			queue := GetNodeTerms(g2)
+			queue = append(queue, GetSubjectFromTriples(g2.All(nil, rdf.NewResource(_sh+"path"), nil))...) // property shapes
 
-			for _, t := range SHACLTerms {
-				shaclTermap[t] = true
+			excluded := make(map[string]bool)
+
+			for len(queue) > 0 {
+				t := queue[len(queue)-1]
+				queue = queue[:len(queue)-1]
+				if excluded[t.String()] {
+					continue
+				}
+				excluded[t.String()] = true
+				for _, tr := range g2.All(t, nil, nil) {
+					if _, ok := tr.Object.(*rdf.BlankNode); ok { // nested shapes, list cells, complex paths
+						queue = append(queue, tr.Object)
+					}
+				}
 			}
 
 			for r := range g2.IterTriples() {
-				if shaclTermap[r.Subject] { // skip triples whose subject is a term from shape graph
+				if excluded[r.Subject.String()] && SHACLPredicate(r.Predicate) { // skip triples whose subject is a term from shape graph and who use a "SHACL" vocabulary predicate
 					continue
 				}
+				if excluded[r.Subject.String()] && r.Predicate.RawValue() == _rdf+"type" && r.Object.RawValue() == _sh+"NodeShape" { // skip triples that define a SHACL shape
+					continue
+				}
+				if excluded[r.Subject.String()] && r.Predicate.RawValue() == _rdf+"type" && r.Object.RawValue() == _sh+"PropertyShape" { // skip triples that define a SHACL shape
+					continue
+				}
+
 				selectedTriples = append(selectedTriples, r)
 			}
 
@@ -979,10 +1012,10 @@ func main() {
 				g2ModuloShapes.Add(t)
 			}
 
-			g2 = g2ModuloShapes
+			insertGraph = g2ModuloShapes
 
 		}
-		err := endpoint.Insert(g2, "<"+_sh+fileName+">", opts.ReuseData)
+		err := endpoint.Insert(insertGraph, "<"+_sh+fileName+">", opts.ReuseData)
 		check(err)
 
 		graphName = "<" + _sh + fileName + ">"

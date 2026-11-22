@@ -657,7 +657,7 @@ func shawellInvalid(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP 
 
 	renameMap = make(map[rdf.Term]string)
 	reverseMap = make(map[string]rdf.Term)
-	doc := GetShaclDocument(g, graphName, false)
+	doc := GetShaclDocument(g, graphName, false, "well-founded")
 	activeDoc = &doc
 	doc.AllCondAnswers(ep)
 
@@ -691,7 +691,7 @@ func shawellInvalid(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP 
 // the report agrees with the verdict.
 func shawellReport(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP bool) (report *ValidationReport, err any) {
 	defer func() { err = recover() }()
-	doc := GetShaclDocument(g, graphName, false)
+	doc := GetShaclDocument(g, graphName, false, "well-founded")
 	activeDoc = &doc
 	return answerShacl(ep, doc, config{silent: true, forceLP: forceLP, semantics: "well-founded"}), nil
 }
@@ -814,7 +814,7 @@ func TestDifferentialValidation(t *testing.T) {
 
 			// printing the parsed document walks all nested shapes, with and without blank shapes
 			for _, debug := range []bool{false, true} {
-				parsed := GetShaclDocument(g, graphName, false)
+				parsed := GetShaclDocument(g, graphName, false, "well-founded")
 				parsed.debug = debug
 				if err := noPanic(func() { _ = parsed.String() }); err != nil {
 					problems = append(problems, fmt.Sprintf("ShaclDocument.String (debug=%v): panic: %v", debug, err))

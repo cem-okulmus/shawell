@@ -275,28 +275,48 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool, semanti
 		_, out.depMap[name] = out.TransitiveClosure(name)
 	}
 
-	// // attach indirect Targets (hope this pointer stuff works)
-	// for k, v := range out.depMap {
-	// 	tmp := out.shapeNames[k].GetTargets(true)
+	// Add Const Targets in case of Stable Model Semantics
+	var ConstsToAdd []rdf.Term
 
-	// 	for _, dep := range v {
-	// 		for _, s := range dep.name {
-	// 			var indirects []TargetIndirect
-	// 			for i := range tmp {
-	// 				indirect := DepToIndirectTarget(dep, tmp[i])
-	// 				indirects = append(indirects, indirect)
-	// 			}
-	// 			if debug {
-	// 				fmt.Println("Gotten ", len(tmp), " targets from dependant. Path ", dep.path)
+	if semantics == "stable-brave" || semantics == "stable-cautious" {
+		for _, shape := range out.shapeNames {
 
-	// 				// fmt.Println("Number of dependant shapes: ", len(v))
-	// 				fmt.Println("Adding ", len(indirects), " indirect targets to shape ", s.name, " from origin ", k)
-	// 			}
+			var nodeShape *NodeShape
 
-	// 			out.shapeNames[s.name].AddIndirectTargets(indirects, nil) // don't change paths, as they were already defined abvoes
-	// 		}
-	// 	}
-	// }
+			switch shapeType := shape.(type) {
+			case *NodeShape:
+				nodeShape = shapeType
+			case *PropertyShape:
+				nodeShape = shapeType.shape
+			}
+
+			// sh:hasValue and sh:in
+			for _, oc := range nodeShape.others {
+				if oc.oc == in || oc.oc == hasValue {
+					ConstsToAdd = append(ConstsToAdd, oc.terms...)
+				}
+			}
+
+			// sh:class
+			for _, vt := range nodeShape.valuetypes {
+				if vt.vt == class {
+					ConstsToAdd = append(ConstsToAdd, vt.term)
+				}
+			}
+
+			// sh:targetNode, sh:targetClass
+			for _, targeExp := range nodeShape.target {
+				switch targetType := targeExp.(type) {
+				case TargetClass:
+					ConstsToAdd = append(ConstsToAdd, targetType.class)
+				case TargetNode:
+					ConstsToAdd = append(ConstsToAdd, targetType.node)
+				}
+			}
+
+		}
+
+	}
 
 	// attach indirect targets: the targets of a shape S are its direct targets, the values of every
 	// path through which some shape references S, and the targets of every shape that references S
@@ -338,6 +358,9 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool, semanti
 		// add TargetDomain to every shape in stable seamntics
 		if semantics == "stable-brave" || semantics == "stable-cautious" {
 			add(shapeName, []TargetIndirect{{actual: TargetDomain{}}})
+			for _, term := range ConstsToAdd {
+				add(shapeName, []TargetIndirect{{actual: TargetNode{node: term}}})
+			}
 		}
 	}
 
