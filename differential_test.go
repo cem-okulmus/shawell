@@ -664,7 +664,7 @@ func shawellInvalid(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP 
 	var tables map[string]Table[rdf.Term]
 	if forceLP || doc.IsRecursive() {
 		lp := doc.GetAllLPs()
-		lpTables, undefined, _, _ := lp.Answer(false, false, "well-founded")
+		lpTables, undefined, _ := lp.Answer(false, false, "well-founded")
 		if err := doc.AdoptLPAnswers(lpTables); err != nil {
 			panic(err)
 		}

@@ -269,29 +269,6 @@ func (d LPOutput) UndefinedToTables() (out []Table[rdf.Term]) {
 	return out
 }
 
-// type ClingoWitness struct {
-// 	Value []string
-// 	Costs []int
-// }
-
-// type ClingoCall struct {
-// 	witnesses []ClingoWitness
-// }
-
-// type ClingoModels struct {
-// 	number   int
-// 	more     string
-// 	optimum  string
-// 	cautious string
-// }
-
-type clingoSemantics int
-
-const (
-	clingoStableBrave clingoSemantics = iota
-	clingoStableCautious
-)
-
 type solveStatus int
 
 const (
@@ -306,7 +283,6 @@ type ClingoOutput struct {
 	TimeLimit bool       `parser:" @(\"TIME\" \"LIMIT\")? ( !\"Models\" )* "`
 	Models    string     `parser:" \"Models\" \":\" @(Number|Ident) "`
 	Rest      []string   `parser:" ( !\"\" )* "`
-	Complete  bool
 }
 
 var graphLexer = lexer.Must(ebnf.New(`
@@ -322,23 +298,14 @@ var graphLexer = lexer.Must(ebnf.New(`
     any = "\u0000"…"\uffff" .
     `))
 
-// runClingo invokes Clingo under the specified semantics and returns the parsed output.
+// runClingo invokes clingo and returns the parsed output.
 // When debug is true the raw Clingo output is printed, passed through DecodedString.
-func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPOutput, solveStatus, bool) {
+func (p serialisedProgram) runClingo(debug bool) (LPOutput, solveStatus) {
 	if p.IsEmpty() {
-		return LPOutput{}, satisfiable, true
+		return LPOutput{}, satisfiable
 	}
 
-	var args []string
-	switch semantics {
-	case clingoStableBrave:
-		args = []string{"--verbose=1", "--quiet=1,2,2", "--warn=none"} // do not use enum mode brave, since we need a single model to satisfy all targets
-	case clingoStableCautious:
-		args = []string{"--verbose=1", "--quiet=1,2,2", "--warn=none", "--enum-mode=cautious"}
-	}
-
-	// clingoCmd, err := findClingo("")
-	// check(err)
+	args := []string{"--verbose=1", "--quiet=1,2,2", "--warn=none"} // do not use enum mode brave, since we need a single model to satisfy all targets
 
 	shapes := make(map[string]bool)
 	// determine the list of shape atoms to pass to clingo as show lines
@@ -387,8 +354,6 @@ func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPO
 		log.Panicln("input for parser: ", outString, "\n \n", err)
 	}
 
-	parsedClingoOutput.Complete = !strings.HasSuffix(parsedClingoOutput.Models, "+")
-
 	var solveStatus solveStatus
 
 	if strings.Contains(parsedClingoOutput.Status, "UNSATISFIABLE") {
@@ -407,7 +372,7 @@ func (p serialisedProgram) runClingo(debug bool, semantics clingoSemantics) (LPO
 
 	return LPOutput{
 		Answers: parsedClingoOutput.Answers,
-	}, solveStatus, parsedClingoOutput.Complete
+	}, solveStatus
 }
 
 // runDLV invokes DLV under well-founded semantics and returns the parsed output.
@@ -462,30 +427,26 @@ func (p serialisedProgram) runDLV(debug bool, nofacts bool) LPOutput {
 	return parsedDLVOutput
 }
 
-// Answer sends the logic program to DLV configured for well-founded semantics and returns the computed interpretation.
+// Answer sends the logic program to DLV configured for well-founded semantics or clingo and returns the computed interpretation.
 // Returns (true tables, undefined tables), each grouped by predicate arity.
-func (p serialisedProgram) Answer(debug bool, nofacts bool, semantics string) ([]Table[rdf.Term], []Table[rdf.Term], solveStatus, bool) {
+func (p serialisedProgram) Answer(debug bool, nofacts bool, semantics string) ([]Table[rdf.Term], []Table[rdf.Term], solveStatus) {
 
 	var out LPOutput
 	var solveStatus solveStatus
-	var complete bool
 	switch semantics {
 	case "well-founded":
 		out = p.runDLV(debug, nofacts)
-		complete = true
 		solveStatus = satisfiable
-	case "stable-brave":
-		out, solveStatus, complete = p.runClingo(debug, clingoStableBrave)
-	case "stable-cautious":
-		out, solveStatus, complete = p.runClingo(debug, clingoStableCautious)
+	case "stable-brave", "stable-cautious":
+		out, solveStatus = p.runClingo(debug)
 	default:
 		log.Panicln("Unknown semantics or not yet implemented: ", semantics)
 	}
 
 	if p.IsEmpty() {
-		return []Table[rdf.Term]{}, []Table[rdf.Term]{}, solveStatus, complete
+		return []Table[rdf.Term]{}, []Table[rdf.Term]{}, solveStatus
 	}
-	return out.ToTables(), out.UndefinedToTables(), solveStatus, complete
+	return out.ToTables(), out.UndefinedToTables(), solveStatus
 }
 
 // String returns a string representation of the logic program with all rules.
@@ -1053,6 +1014,45 @@ func (s ShaclDocument) GetTargetConstraintsLP(ep endpoint) (out serialisedProgra
 		}
 
 	}
+
+	return out
+}
+
+// GetTargetConstraintsLPCautious encodes a logic program to check that an LP cannot always satisfy all shape targets
+// at the same time. This is used for the stable cautious check, as part of its first call
+func (s ShaclDocument) GetTargetConstraintsLPCautious(ep endpoint) (out serialisedProgram) {
+
+	s.MaterialiseTargets(ep)
+
+	var allShapeTrueAtoms []string
+
+	for name, value := range s.shapeNames {
+
+		// ignore shapes set to inactive, as they should be ignored for the purpose of validation
+		if !value.IsActive() {
+			continue
+		}
+
+		targetTable := s.targets[name]
+		var allRewrittenTargetAtoms []string
+
+		for row := range targetTable.IterRows() {
+			allRewrittenTargetAtoms = append(allRewrittenTargetAtoms, value.GetLogName()+"("+rewrite(row[0])+")")
+		}
+
+		// for shape S: tgt + S is true iff all its targetAtoms are of shape S
+		out.rules = append(out.rules, serialisedRule{head: "tgt" + value.GetLogName(), body: allRewrittenTargetAtoms})
+
+		allShapeTrueAtoms = append(allShapeTrueAtoms, "tgt"+value.GetLogName())
+
+	}
+
+	if len(allShapeTrueAtoms) == 0 {
+		return serialisedProgram{}
+	}
+
+	// constraint: do not make all shapes true at the same time
+	out.rules = append(out.rules, serialisedRule{head: "", body: allShapeTrueAtoms})
 
 	return out
 }

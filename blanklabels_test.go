@@ -31,24 +31,24 @@ type blankLabelCase struct {
 var blankLabelCases = []blankLabelCase{
 	{
 		// _:a as subject: from the domain query of :U and the query of the separate property shape :P
-		name:   "subject across shapes",
-		data:   `_:a :p _:a .`,
+		name: "subject across shapes",
+		data: `_:a :p _:a .`,
 		shapes: `:U a sh:NodeShape ; sh:targetSubjectsOf :p ; sh:or ( :P [ sh:not :U ] ) .
 :P a sh:PropertyShape ; sh:path :p ; sh:minCount 1 .`,
 		want: Valid,
 	},
 	{
 		// _:b as object: a value of :p in the query of :U, and a focus node in the query of :V
-		name:   "path value across shapes",
-		data:   `_:a :p _:b . _:b :q 1 .`,
+		name: "path value across shapes",
+		data: `_:a :p _:b . _:b :q 1 .`,
 		shapes: `:U a sh:NodeShape ; sh:targetSubjectsOf :p ; sh:or ( [ sh:path :p ; sh:node :V ] [ sh:not :U ] ) .
 :V a sh:NodeShape ; sh:property [ sh:path :q ; sh:minCount 1 ] .`,
 		want: Valid,
 	},
 	{
 		// negative control: _:b has no :q, which is what a label mismatch in the case above looks like
-		name:   "path value across shapes, negative",
-		data:   `_:a :p _:b .`,
+		name: "path value across shapes, negative",
+		data: `_:a :p _:b .`,
 		shapes: `:U a sh:NodeShape ; sh:targetSubjectsOf :p ; sh:or ( [ sh:path :p ; sh:node :V ] [ sh:not :U ] ) .
 :V a sh:NodeShape ; sh:property [ sh:path :q ; sh:minCount 1 ] .`,
 		want: -1, // depends on the mode, see blankLabelWant
@@ -72,15 +72,16 @@ func iriVariant(data string) string {
 }
 
 // validateSeparateGraphs inserts the data into its own named graph and parses the shapes from a separate graph,
-// as shawell does without --dataIncluded, so the shapes graph cannot reach the domain.
-func validateSeparateGraphs(t *testing.T, ep *SparqlEndpoint, name, data, shapes, semantics string) ValidationStatus {
+// as shawell does without --dataIncluded, so the shapes graph cannot reach the domain. data and shapes are
+// complete Turtle documents, prefixes included.
+func validateSeparateGraphs(t *testing.T, ep *SparqlEndpoint, name, data, shapes string, cfg config) ValidationStatus {
 	t.Helper()
 	dataGraph := rdf.NewGraph(_sh)
-	if err := dataGraph.Parse(strings.NewReader(blankLabelPrefixes+data), "text/turtle"); err != nil {
+	if err := dataGraph.Parse(strings.NewReader(data), "text/turtle"); err != nil {
 		t.Fatal(err)
 	}
 	shapesGraph := rdf.NewGraph(_sh)
-	if err := shapesGraph.Parse(strings.NewReader(blankLabelPrefixes+shapes), "text/turtle"); err != nil {
+	if err := shapesGraph.Parse(strings.NewReader(shapes), "text/turtle"); err != nil {
 		t.Fatal(err)
 	}
 	prefixes = make(map[string]string)
@@ -94,9 +95,9 @@ func validateSeparateGraphs(t *testing.T, ep *SparqlEndpoint, name, data, shapes
 	}
 	defer ep.ClearGraph(graphName) //nolint:errcheck
 
-	doc := GetShaclDocument(shapesGraph, graphName, false, semantics)
+	doc := GetShaclDocument(shapesGraph, graphName, false, cfg.semantics)
 	activeDoc = &doc
-	report := answerShacl(ep, doc, config{silent: true, omitVR: true, semantics: semantics})
+	report := answerShacl(ep, doc, cfg)
 	return report.status
 }
 
@@ -111,7 +112,8 @@ func runBlankLabelCases(t *testing.T, ep *SparqlEndpoint) {
 		for _, variant := range []struct{ name, data string }{{"blank", c.data}, {"iri", iriVariant(c.data)}} {
 			for _, semantics := range []string{"well-founded", "stable-brave", "stable-cautious"} {
 				t.Run(c.name+"/"+variant.name+"/"+semantics, func(t *testing.T) {
-					got := validateSeparateGraphs(t, ep, "blanklabels", variant.data, c.shapes, semantics)
+					got := validateSeparateGraphs(t, ep, "blanklabels", blankLabelPrefixes+variant.data,
+						blankLabelPrefixes+c.shapes, config{silent: true, omitVR: true, semantics: semantics})
 					if want := blankLabelWant(c, semantics); got != want {
 						t.Errorf("got status %v, want %v", got, want)
 					}

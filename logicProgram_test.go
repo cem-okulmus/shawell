@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -1028,10 +1029,10 @@ ex:n1 ex:p ex:n2 .
 }
 
 // The tests below are those of step 1.8 of stable_semantics_plan.md, written against runClingo as
-// it is implemented: it takes a semantics instead of free flags, shows the shapeN/1 atoms only, and
-// returns a solveStatus and whether the search was complete. Solver errors still end the process,
-// so each case runs runClingo in a copy of the test binary (TestClingoHelperProcess), so that an
-// exit or a panic becomes an observable outcome instead of ending the test run.
+// it is implemented: a single plain solve that shows the shapeN/1 atoms only and returns a
+// solveStatus. Solver errors still end the process, so each case runs runClingo in a copy of the
+// test binary (TestClingoHelperProcess), so that an exit or a panic becomes an observable outcome
+// instead of ending the test run.
 
 const (
 	clingoCaseEnv   = "SHAWELL_CLINGO_CASE"
@@ -1041,15 +1042,13 @@ const (
 // clingoCase is the input handed to the helper process.
 type clingoCase struct {
 	Rules     [][]string // each rule as head followed by its body atoms
-	Semantics int
-	ExtraArgs []string // appended to every clingo call, through a wrapper script (Unix only)
+	ExtraArgs []string   // appended to every clingo call, through a wrapper script (Unix only)
 }
 
 // clingoOutcome is what the helper process did with a clingoCase.
 type clingoOutcome struct {
 	returned bool        // runClingo came back, as opposed to ending the process
 	status   solveStatus // the second return value of runClingo
-	complete bool        // the third return value of runClingo
 	atoms    []string    // the true atoms, sorted, e.g. "shape1(c)"
 	exitCode int
 	stderr   string
@@ -1069,7 +1068,7 @@ func statusName(s solveStatus) string {
 
 func (o clingoOutcome) String() string {
 	if o.returned {
-		return fmt.Sprintf("returned status=%s complete=%v atoms=%v", statusName(o.status), o.complete, o.atoms)
+		return fmt.Sprintf("returned status=%s atoms=%v", statusName(o.status), o.atoms)
 	}
 	return fmt.Sprintf("process ended with exit code %d\nstderr:\n%s", o.exitCode, o.stderr)
 }
@@ -1144,33 +1143,33 @@ func TestClingoHelperProcess(t *testing.T) {
 		program.rules = append(program.rules, serialisedRule{head: r[0], body: r[1:]})
 	}
 
-	out, status, complete := program.runClingo(false, clingoSemantics(c.Semantics))
+	out, status := program.runClingo(false)
 
 	atoms := []string{}
 	for _, a := range out.Answers {
 		atoms = append(atoms, fmt.Sprintf("%s%s(%s)", a.Negation, a.Predicate, strings.Join(a.Constant, ",")))
 	}
 	sort.Strings(atoms)
-	result, _ := json.Marshal(map[string]any{"status": int(status), "complete": complete, "atoms": atoms})
+	result, _ := json.Marshal(map[string]any{"status": int(status), "atoms": atoms})
 	fmt.Println(clingoResultTag + string(result))
 	os.Exit(0)
 }
 
 // solveWithClingo runs runClingo on the given rules in a separate process and reports the outcome.
-func solveWithClingo(t *testing.T, semantics clingoSemantics, rules ...[]string) clingoOutcome {
+func solveWithClingo(t *testing.T, rules ...[]string) clingoOutcome {
 	t.Helper()
-	return solveWithClingoArgs(t, semantics, nil, rules...)
+	return solveWithClingoArgs(t, nil, rules...)
 }
 
 // solveWithClingoArgs is solveWithClingo with extra clingo arguments, e.g. --time-limit=1.
-func solveWithClingoArgs(t *testing.T, semantics clingoSemantics, extra []string, rules ...[]string) clingoOutcome {
+func solveWithClingoArgs(t *testing.T, extra []string, rules ...[]string) clingoOutcome {
 	t.Helper()
 	requireClingo(t)
 	if len(extra) > 0 && runtime.GOOS == "windows" {
 		t.Skip("extra clingo arguments need a shell wrapper script")
 	}
 
-	encoded, err := json.Marshal(clingoCase{Rules: rules, Semantics: int(semantics), ExtraArgs: extra})
+	encoded, err := json.Marshal(clingoCase{Rules: rules, ExtraArgs: extra})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1190,15 +1189,14 @@ func solveWithClingoArgs(t *testing.T, semantics clingoSemantics, extra []string
 	for _, line := range strings.Split(string(stdout), "\n") {
 		if rest, found := strings.CutPrefix(line, clingoResultTag); found {
 			var result struct {
-				Status   int
-				Complete bool
-				Atoms    []string
+				Status int
+				Atoms  []string
 			}
 			if err := json.Unmarshal([]byte(rest), &result); err != nil {
 				t.Fatalf("bad helper output %q: %v", line, err)
 			}
 			out.returned = true
-			out.status, out.complete, out.atoms = solveStatus(result.Status), result.Complete, result.Atoms
+			out.status, out.atoms = solveStatus(result.Status), result.Atoms
 		}
 	}
 	if !out.returned && out.exitCode == 0 {
@@ -1223,38 +1221,28 @@ var pigeonhole = [][]string{
 	{"", "at(P1,H)", "at(P2,H)", "P1<P2"},
 }
 
-// Plan row 1: brave runs without a mode flag, so clingo stops at the first model, and that model is
-// exactly one of the two. complete is not checked: "Models : 1+" is normal here.
-func TestClingoBraveEvenLoop(t *testing.T) {
-	out := solveWithClingo(t, clingoStableBrave, evenLoop...)
+// Plan row 1: runClingo runs without a mode flag, so clingo stops at the first model, and that
+// model is exactly one of the two.
+func TestClingoEvenLoop(t *testing.T) {
+	out := solveWithClingo(t, evenLoop...)
 	got := strings.Join(out.atoms, " ")
 	if !out.returned || out.status != satisfiable || (got != "shape1(c)" && got != "shape2(c)") {
 		t.Errorf("expected one model, [shape1(c)] or [shape2(c)], got: %v", out)
 	}
 }
 
-// Plan row 2: no atom is in both stable models, and the search is exhausted.
-func TestClingoCautiousEvenLoop(t *testing.T) {
-	out := solveWithClingo(t, clingoStableCautious, evenLoop...)
-	if !out.returned || out.status != satisfiable || !out.complete || len(out.atoms) != 0 {
-		t.Errorf("expected a complete run with no cautious consequences, got: %v", out)
-	}
-}
-
 // Plan row 4: a program without a stable model is reported as unsatisfiable, never as a model.
 func TestClingoUnsatisfiable(t *testing.T) {
-	for _, semantics := range []clingoSemantics{clingoStableBrave, clingoStableCautious} {
-		out := solveWithClingo(t, semantics, []string{"shape1(c)", "not shape1(c)"})
-		if !out.returned || out.status != unsatisfiable || !out.complete {
-			t.Errorf("semantics %d: expected a complete unsatisfiable run, got: %v", semantics, out)
-		}
+	out := solveWithClingo(t, []string{"shape1(c)", "not shape1(c)"})
+	if !out.returned || out.status != unsatisfiable {
+		t.Errorf("expected an unsatisfiable run, got: %v", out)
 	}
 }
 
 // Plan row 5: an upper-case predicate is a syntax error in clingo. That is an error, not a verdict:
 // it must not look like a model, like "no stable model", or like an interrupted run.
 func TestClingoSyntaxError(t *testing.T) {
-	out := solveWithClingo(t, clingoStableBrave, []string{"Shape1(a)"})
+	out := solveWithClingo(t, []string{"Shape1(a)"})
 	if out.returned {
 		t.Fatalf("a syntax error was returned as a solver result instead of an error: %v", out)
 	}
@@ -1267,57 +1255,204 @@ func TestClingoSyntaxError(t *testing.T) {
 // Clingo warns about it, and about the #show line for a predicate without atoms; neither may break
 // the parsing of the output. The plan runs this without --warn=none, which runClingo always passes.
 func TestClingoUndefinedBodyAtom(t *testing.T) {
-	for _, semantics := range []clingoSemantics{clingoStableBrave, clingoStableCautious} {
-		out := solveWithClingo(t, semantics, []string{"shape1(c)", "shape2(c)"})
-		if !out.returned || out.status != satisfiable || len(out.atoms) != 0 {
-			t.Errorf("semantics %d: expected a model without atoms, got: %v", semantics, out)
-		}
+	out := solveWithClingo(t, []string{"shape1(c)", "shape2(c)"})
+	if !out.returned || out.status != satisfiable || len(out.atoms) != 0 {
+		t.Errorf("expected a model without atoms, got: %v", out)
 	}
 }
 
 // The empty program has exactly one stable model, the empty one; runClingo answers without clingo.
 func TestClingoEmptyProgram(t *testing.T) {
-	for _, semantics := range []clingoSemantics{clingoStableBrave, clingoStableCautious} {
-		out := solveWithClingo(t, semantics)
-		if !out.returned || out.status != satisfiable || !out.complete || len(out.atoms) != 0 {
-			t.Errorf("semantics %d: expected a complete run with the empty model, got: %v", semantics, out)
+	out := solveWithClingo(t)
+	if !out.returned || out.status != satisfiable || len(out.atoms) != 0 {
+		t.Errorf("expected the empty model, got: %v", out)
+	}
+}
+
+// Interrupted by the time limit before any model is found: unknown, which phase 2 turns into the
+// Unknown verdict. It must neither end the process nor look like "no model".
+func TestClingoTimeLimit(t *testing.T) {
+	out := solveWithClingoArgs(t, []string{"--time-limit=1"}, pigeonhole...)
+	if !out.returned || out.status != unknown {
+		t.Errorf("expected an unknown run, got: %v", out)
+	}
+}
+
+// The tests below check call 1 of the cautious mode (plan phase 2, step 4): the program merged with
+// GetTargetConstraintsLPCautious is satisfiable exactly when some stable model fails some target,
+// and such a model is the counter-model. The constraint program comes from the real function, on a
+// document whose targets are set by hand; only the shapes' rules are written out here.
+
+// cautiousShape describes one shape of the document handed to GetTargetConstraintsLPCautious.
+type cautiousShape struct {
+	id       int64
+	targets  []string // focus nodes, as IRIs below http://example.org/cautious#
+	inactive bool
+}
+
+// cautiousCall1 builds the target constraint program for the given shapes, merges it with rules,
+// and solves the result. In rules, the constant $x stands for the encoding of the focus node x.
+// It returns the solver outcome and the constraint program itself.
+func cautiousCall1(t *testing.T, extra []string, shapes []cautiousShape, rules ...[]string) (clingoOutcome, serialisedProgram) {
+	t.Helper()
+	oldRenameMap, oldReverseMap, oldCount := renameMap, reverseMap, theCount
+	defer func() { renameMap, reverseMap, theCount = oldRenameMap, oldReverseMap, oldCount }()
+	renameMap = make(map[rdf.Term]string)
+	reverseMap = make(map[string]rdf.Term)
+	theCount = 0
+
+	doc := ShaclDocument{
+		shapeNames:   make(map[string]Shape),
+		targets:      make(map[string]Table[rdf.Term]),
+		materialised: true, // the targets below stand in for the endpoint's answers
+	}
+	for _, s := range shapes {
+		name := fmt.Sprint("http://example.org/cautious#S", s.id)
+		doc.shapeNames[name] = &NodeShape{id: s.id, deactivated: s.inactive}
+		table := &TableSimple[rdf.Term]{header: []string{"target"}}
+		for _, x := range s.targets {
+			table.AddRow([]rdf.Term{rdf.Resource{URI: "http://example.org/cautious#" + x}})
+		}
+		doc.targets[name] = table
+	}
+
+	constraints := doc.GetTargetConstraintsLPCautious(nil)
+
+	// replace $x in the given rules by the encoding of x, also for nodes that are no target
+	placeholder := regexp.MustCompile(`\$(\w+)`)
+	encode := func(m string) string { return rewrite(rdf.Resource{URI: "http://example.org/cautious#" + m[1:]}) }
+	var all [][]string
+	for _, r := range rules {
+		rule := make([]string, len(r))
+		for i := range r {
+			rule[i] = placeholder.ReplaceAllStringFunc(r[i], encode)
+		}
+		all = append(all, rule)
+	}
+	for _, r := range constraints.rules {
+		all = append(all, append([]string{r.head}, r.body...))
+	}
+
+	return solveWithClingoArgs(t, extra, all...), constraints
+}
+
+// shownOnlyShapes reports an error if the model shows anything but shape atoms, e.g. the auxiliary
+// atoms of the constraint, which AdoptLPAnswers would then try to read as shapes.
+func shownOnlyShapes(t *testing.T, out clingoOutcome) {
+	t.Helper()
+	for _, a := range out.atoms {
+		if !strings.HasPrefix(a, "shape") {
+			t.Errorf("the model shows %q, which is not a shape atom", a)
 		}
 	}
 }
 
-// Cautious stopped after the first model (-n1): deterministic, and the "Models : 1+" summary must
-// come back as an incomplete run. The candidate set is then only an upper bound.
-func TestClingoCautiousIncomplete(t *testing.T) {
-	out := solveWithClingoArgs(t, clingoStableCautious, []string{"-n1"}, evenLoop...)
-	if !out.returned || out.status != satisfiable || out.complete || len(out.atoms) != 1 {
-		t.Errorf("expected an incomplete run with one candidate atom, got: %v", out)
+// A cx5-like document: the two targets of shape1 are in an even loop, so every stable model fails
+// one of them. Call 1 must find such a model.
+func TestCautiousCounterModel(t *testing.T) {
+	out, _ := cautiousCall1(t, nil,
+		[]cautiousShape{{id: 1, targets: []string{"a", "b"}}},
+		[]string{"shape1($a)", "not shape1($b)"},
+		[]string{"shape1($b)", "not shape1($a)"},
+	)
+	if !out.returned || out.status != satisfiable || len(out.atoms) != 1 {
+		t.Errorf("expected a counter-model with exactly one of the two targets, got: %v", out)
+	}
+	shownOnlyShapes(t, out)
+}
+
+// The targets are spread over two shapes, each target holds in some model, and no model satisfies
+// both. A counter-model needs only one shape to fail.
+func TestCautiousCounterModelAcrossShapes(t *testing.T) {
+	out, _ := cautiousCall1(t, nil,
+		[]cautiousShape{{id: 1, targets: []string{"a"}}, {id: 2, targets: []string{"b"}}},
+		[]string{"shape1($a)", "not shape2($b)"},
+		[]string{"shape2($b)", "not shape1($a)"},
+	)
+	if !out.returned || out.status != satisfiable || len(out.atoms) != 1 {
+		t.Errorf("expected a counter-model with exactly one of the two targets, got: %v", out)
+	}
+	shownOnlyShapes(t, out)
+}
+
+// A cx4-like document: there are two stable models, from an even loop between shape2 and shape3,
+// and both satisfy the only target. Call 1 must be unsatisfiable. shape2 and shape3 have no targets,
+// so this also checks that an untargeted shape does not keep the constraint from firing.
+func TestCautiousNoCounterModel(t *testing.T) {
+	out, _ := cautiousCall1(t, nil,
+		[]cautiousShape{{id: 1, targets: []string{"a"}}, {id: 2}, {id: 3}},
+		[]string{"shape1($a)"},
+		[]string{"shape2($a)", "not shape3($a)"},
+		[]string{"shape3($a)", "not shape2($a)"},
+	)
+	if !out.returned || out.status != unsatisfiable {
+		t.Errorf("expected no counter-model, got: %v", out)
 	}
 }
 
-// Cautious interrupted by the time limit after its first model: shape1(k) is found at once, and
-// refuting it needs the pigeonhole proof. Clingo reports SATISFIABLE; only "Models : 1+" shows that
-// the candidate set may still be too large.
-func TestClingoCautiousTimeLimit(t *testing.T) {
-	rules := [][]string{
-		{"pigeon(1..12)"},
-		{"hole(1..11)"},
-		{"{aux(k)}"},
-		{"shape1(k)", "not aux(k)"},
-		{"{ at(P,H) : hole(H) } = 1", "pigeon(P)", "aux(k)"},
-		{"", "at(P1,H)", "at(P2,H)", "P1<P2"},
+// A target that was never grounded is false in every model, so every model is a counter-model.
+func TestCautiousUngroundedTarget(t *testing.T) {
+	out, _ := cautiousCall1(t, nil,
+		[]cautiousShape{{id: 1, targets: []string{"a", "b"}}},
+		[]string{"shape1($a)"},
+	)
+	if !out.returned || out.status != satisfiable {
+		t.Errorf("expected a counter-model, got: %v", out)
 	}
-	out := solveWithClingoArgs(t, clingoStableCautious, []string{"--time-limit=1"}, rules...)
-	if !out.returned || out.status != satisfiable || out.complete {
-		t.Errorf("expected a satisfiable but incomplete run, got: %v", out)
+	shownOnlyShapes(t, out)
+}
+
+// An inactive shape is not validated, so its unsatisfied target must not produce a counter-model.
+func TestCautiousInactiveShape(t *testing.T) {
+	out, _ := cautiousCall1(t, nil,
+		[]cautiousShape{{id: 1, targets: []string{"a"}}, {id: 2, targets: []string{"b"}, inactive: true}},
+		[]string{"shape1($a)"},
+	)
+	if !out.returned || out.status != unsatisfiable {
+		t.Errorf("expected no counter-model, got: %v", out)
 	}
 }
 
-// Brave interrupted before any model is found: unknown, which phase 2 turns into the Unknown
-// verdict. It must neither end the process nor look like "no model".
-func TestClingoBraveTimeLimit(t *testing.T) {
-	out := solveWithClingoArgs(t, clingoStableBrave, []string{"--time-limit=1"}, pigeonhole...)
-	if !out.returned || out.status != unknown || out.complete {
-		t.Errorf("expected an unknown, incomplete run, got: %v", out)
+// Without targets nothing can fail, so call 1 must not find a counter-model, whether the document
+// has shapes without targets or no active shape at all. If the constraint program is empty, the
+// caller has to skip call 1 instead (plan phase 2, step 4); a merged run would then find the plain
+// model and report it as a counter-model.
+func TestCautiousNoTargets(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		shapes []cautiousShape
+	}{
+		{"untargeted shapes", []cautiousShape{{id: 1}, {id: 2}}},
+		{"inactive shapes", []cautiousShape{{id: 1, targets: []string{"a"}, inactive: true}}},
+		{"no shapes", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out, constraints := cautiousCall1(t, nil, c.shapes, []string{"shape1($a)"}, evenLoop[0], evenLoop[1])
+			if constraints.IsEmpty() {
+				return
+			}
+			if !out.returned || out.status != unsatisfiable {
+				t.Errorf("expected no counter-model, got: %v\nconstraint program:\n%s", out, constraints)
+			}
+		})
+	}
+}
+
+// Call 1 interrupted before any model is found: unknown, which the cautious branch turns into the
+// Unknown verdict without running call 2. The program has no counter-model, and proving that needs
+// the pigeonhole proof.
+func TestCautiousTimeLimit(t *testing.T) {
+	out, _ := cautiousCall1(t, []string{"--time-limit=1"},
+		[]cautiousShape{{id: 1, targets: []string{"k"}}},
+		[]string{"pigeon(1..12)"},
+		[]string{"hole(1..11)"},
+		[]string{"{aux}"},
+		[]string{"shape1($k)", "not aux"},
+		[]string{"{ at(P,H) : hole(H) } = 1", "pigeon(P)", "aux"},
+		[]string{"", "at(P1,H)", "at(P2,H)", "P1<P2"},
+	)
+	if !out.returned || out.status != unknown {
+		t.Errorf("expected an unknown run, got: %v", out)
 	}
 }
 

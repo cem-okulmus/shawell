@@ -282,7 +282,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 
 				start = time.Now()
 				// fmt.Println("Unified LP: ", lp)
-				lpTables, lpUndefinedTables, _, _ = lp.Answer(debug, false, "well-founded")
+				lpTables, lpUndefinedTables, _ = lp.Answer(debug, false, "well-founded")
 				d = time.Since(start)
 				msec = d.Seconds() * float64(time.Second/time.Millisecond)
 				c.times = append(c.times, labelTime{time: msec, label: "DLV solving"})
@@ -324,7 +324,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 
 				start = time.Now()
 				// fmt.Println("Unified LP: ", lp)
-				lpTables, _, solveStatus, _ = mergedLP.Answer(debug, false, "stable-brave")
+				lpTables, _, solveStatus = mergedLP.Answer(debug, false, "stable-brave")
 				d = time.Since(start)
 				msec = d.Seconds() * float64(time.Second/time.Millisecond)
 				c.times = append(c.times, labelTime{time: msec, label: "clingo solving - brave call 1"})
@@ -362,7 +362,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 				} else { // next, if first call was unsatisfiable, run program without targets to see if there is any stable model at all
 					start = time.Now()
 					// fmt.Println("Unified LP: ", lp)
-					lpTables, _, solveStatus, _ = lp.Answer(debug, false, "stable-brave")
+					lpTables, _, solveStatus = lp.Answer(debug, false, "stable-brave")
 					d = time.Since(start)
 					msec = d.Seconds() * float64(time.Second/time.Millisecond)
 					c.times = append(c.times, labelTime{time: msec, label: "clingo solving - brave call 2"})
@@ -405,17 +405,66 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 		case "stable-cautious":
 			{
 				var solveStatus solveStatus
-				var complete bool
 
-				start = time.Now()
-				// fmt.Println("Unified LP: ", lp)
-				lpTables, lpUndefinedTables, solveStatus, complete = lp.Answer(debug, false, "stable-cautious")
-				d = time.Since(start)
-				msec = d.Seconds() * float64(time.Second/time.Millisecond)
-				c.times = append(c.times, labelTime{time: msec, label: "clingo solving"})
+				targetLP := parsedDoc.GetTargetConstraintsLPCautious(ep)
 
-				// no need to run AdoptLPAnswers and ValidateLP if no model was found
-				if solveStatus == satisfiable {
+				if !targetLP.IsEmpty() {
+
+					mergedLP := lp.Merge(targetLP)
+
+					start = time.Now()
+					// fmt.Println("Unified LP: ", lp)
+					lpTables, lpUndefinedTables, solveStatus = mergedLP.Answer(debug, false, "stable-brave")
+					d = time.Since(start)
+					msec = d.Seconds() * float64(time.Second/time.Millisecond)
+					c.times = append(c.times, labelTime{time: msec, label: "clingo solving - cautious call 1"})
+				} else {
+					solveStatus = unsatisfiable
+				}
+
+				// Run second Call to Determine if there is a model or not
+				switch solveStatus {
+				case unsatisfiable:
+					start = time.Now()
+					// fmt.Println("Unified LP: ", lp)
+					lpTables, _, solveStatus = lp.Answer(debug, false, "stable-brave")
+					d = time.Since(start)
+					msec = d.Seconds() * float64(time.Second/time.Millisecond)
+					c.times = append(c.times, labelTime{time: msec, label: "clingo solving - cautious call 2"})
+
+					// no need to run AdoptLPAnswers and ValidateLP if no model was found
+					if solveStatus == satisfiable {
+						err := parsedDoc.AdoptLPAnswers(lpTables)
+						check(err)
+
+						if debug {
+							fmt.Println("Answer from clingo: ")
+							for i := range lpTables {
+								fmt.Println(lpTables[i].Limit(5))
+							}
+						}
+
+						start = time.Now()
+						res, invalidTargets = parsedDoc.ValidateLP(ep)
+						d = time.Since(start)
+						msec = d.Seconds() * float64(time.Second/time.Millisecond)
+						c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from the LP"})
+
+						if !res {
+							log.Panicln("First cautious call showed invalidation is unsatisfiable, but now there are invalid targets !?")
+						}
+					}
+
+					switch solveStatus {
+					case unsatisfiable:
+						status = NoModel
+					case satisfiable:
+						status = Valid
+					default:
+						status = Unknown
+					}
+
+				case satisfiable:
 					err := parsedDoc.AdoptLPAnswers(lpTables)
 					check(err)
 
@@ -431,25 +480,13 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 					d = time.Since(start)
 					msec = d.Seconds() * float64(time.Second/time.Millisecond)
 					c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from the LP"})
-				}
 
-				// if res != (solveStatus == satisfiable) {
-				// 	log.Panicln("Mismatch between res and satisfiable result in stable cautious branch")
-				// }
+					if res {
+						log.Panicln("Found a cautious counter-model, but it validated all targets !?")
+					}
 
-				// determine outcome based on solveStatus, res and complete
-				switch {
-				// case solveStatus == satisfiable:
-				// 	status = Valid
-				case solveStatus == unsatisfiable:
-					status = NoModel
-				case solveStatus == unknown:
-					status = Unknown
-				case !res:
 					status = Invalid
-				case complete:
-					status = Valid
-				default:
+				case unknown:
 					status = Unknown
 				}
 
