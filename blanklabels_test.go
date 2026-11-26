@@ -73,8 +73,8 @@ func iriVariant(data string) string {
 
 // validateSeparateGraphs inserts the data into its own named graph and parses the shapes from a separate graph,
 // as shawell does without --dataIncluded, so the shapes graph cannot reach the domain. data and shapes are
-// complete Turtle documents, prefixes included.
-func validateSeparateGraphs(t *testing.T, ep *SparqlEndpoint, name, data, shapes string, cfg config) ValidationStatus {
+// complete Turtle documents, prefixes included. It returns the report of answerShacl.
+func validateSeparateGraphs(t *testing.T, ep *SparqlEndpoint, name, data, shapes string, cfg config) *ValidationReport {
 	t.Helper()
 	dataGraph := rdf.NewGraph(_sh)
 	if err := dataGraph.Parse(strings.NewReader(data), "text/turtle"); err != nil {
@@ -84,7 +84,7 @@ func validateSeparateGraphs(t *testing.T, ep *SparqlEndpoint, name, data, shapes
 	if err := shapesGraph.Parse(strings.NewReader(shapes), "text/turtle"); err != nil {
 		t.Fatal(err)
 	}
-	prefixes = make(map[string]string)
+	prefixes = map[string]string{"sh:": _sh, "rdf:": _rdf, "rdfs:": _rdfs} // as in startTestOxigraph
 
 	graphName := "<" + _sh + name + ">"
 	if err := ep.ClearGraph(graphName); err != nil {
@@ -97,8 +97,7 @@ func validateSeparateGraphs(t *testing.T, ep *SparqlEndpoint, name, data, shapes
 
 	doc := GetShaclDocument(shapesGraph, graphName, false, cfg.semantics)
 	activeDoc = &doc
-	report := answerShacl(ep, doc, cfg)
-	return report.status
+	return answerShacl(ep, doc, cfg)
 }
 
 func runBlankLabelCases(t *testing.T, ep *SparqlEndpoint) {
@@ -113,7 +112,7 @@ func runBlankLabelCases(t *testing.T, ep *SparqlEndpoint) {
 			for _, semantics := range []string{"well-founded", "stable-brave", "stable-cautious"} {
 				t.Run(c.name+"/"+variant.name+"/"+semantics, func(t *testing.T) {
 					got := validateSeparateGraphs(t, ep, "blanklabels", blankLabelPrefixes+variant.data,
-						blankLabelPrefixes+c.shapes, config{silent: true, omitVR: true, semantics: semantics})
+						blankLabelPrefixes+c.shapes, config{silent: true, omitVR: true, semantics: semantics}).status
 					if want := blankLabelWant(c, semantics); got != want {
 						t.Errorf("got status %v, want %v", got, want)
 					}

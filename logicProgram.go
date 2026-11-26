@@ -995,7 +995,7 @@ func (s ShaclDocument) GetAllLPs() (out serialisedProgram) {
 
 // GetTargetConstraintsLP generates a logic program encoding all constraints for all target shapes in the document.
 // For every target atom t, it will add a rule of the form :- not t. to ensure that the target is satisfied in the stable model.
-func (s ShaclDocument) GetTargetConstraintsLP(ep endpoint) (out serialisedProgram) {
+func (s *ShaclDocument) GetTargetConstraintsLP(ep endpoint) (out serialisedProgram) {
 
 	s.MaterialiseTargets(ep)
 
@@ -1020,7 +1020,7 @@ func (s ShaclDocument) GetTargetConstraintsLP(ep endpoint) (out serialisedProgra
 
 // GetTargetConstraintsLPCautious encodes a logic program to check that an LP cannot always satisfy all shape targets
 // at the same time. This is used for the stable cautious check, as part of its first call
-func (s ShaclDocument) GetTargetConstraintsLPCautious(ep endpoint) (out serialisedProgram) {
+func (s *ShaclDocument) GetTargetConstraintsLPCautious(ep endpoint) (out serialisedProgram) {
 
 	s.MaterialiseTargets(ep)
 

@@ -58,10 +58,11 @@ var prefixes = make(map[string]string)
 
 // making it easier to define proper terms
 var (
-	_sh   = "http://www.w3.org/ns/shacl#"
-	_rdf  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-	_rdfs = "http://www.w3.org/2000/01/rdf-schema#"
-	_xsd  = "http://www.w3.org/2001/XMLSchema#"
+	_shawell = "https://github.com/cem-okulmus/shawell#"
+	_sh      = "http://www.w3.org/ns/shacl#"
+	_rdf     = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+	_rdfs    = "http://www.w3.org/2000/01/rdf-schema#"
+	_xsd     = "http://www.w3.org/2001/XMLSchema#"
 )
 
 // GetNameSpace parses namespace prefixes from a Turtle file and populates the global prefixes map.
@@ -384,10 +385,10 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 						d = time.Since(start)
 						msec = d.Seconds() * float64(time.Second/time.Millisecond)
 						c.times = append(c.times, labelTime{time: msec, label: "Extracing answers from the LP"})
-					}
 
-					if res {
-						log.Panicln("Found brave model without target constraint, but it validated the targets !?")
+						if res {
+							log.Panicln("Found brave model without target constraint, but it validated the targets !?")
+						}
 					}
 
 					switch solveStatus {
@@ -555,43 +556,62 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 		actual.status = status
 
 		start = time.Now()
-		for _, v := range parsedDoc.shapeNames {
-			// var reportsFromShape []ValidationResult
 
-			switch t := v.(type) {
-			case *NodeShape:
-				if t.deactivated {
-					continue
-				}
-				// fmt.Println("Computing VRs for shape ", t.GetIRI())
-				valid, reportsOfShape := parsedDoc.GetValidationReport(t, ep)
-				if !valid {
-					allValid = false
-				}
-				if !valid && len(reportsOfShape) == 0 {
-					log.Panic("Reporting not valid for NodeSHape ", t.IRI,
-						" but no reports returned!")
-				}
+		if status == NoModel || status == Unknown {
 
-				reports = append(reports, reportsOfShape...)
-			case *PropertyShape:
-				if t.shape.deactivated {
-					continue
-				}
-				// fmt.Println("Computing VRs for shape ", t.GetIRI())
-				valid, repsOfShape := parsedDoc.GetVRProperty(t, ep, nil, "")
-				if !valid {
-					allValid = false
-				}
+			if !silent && status == NoModel {
+				fmt.Fprintln(os.Stderr, "Warning: no stable model exists; the report lists every target as violated.")
+			} else if !silent {
+				fmt.Fprintln(os.Stderr, "Warning: the solver was interrupted; the report lists every target, without a verdict for any of them.")
+			}
 
-				if !valid && len(repsOfShape) == 0 {
-					log.Panic("Reporting not valid for PropertyShape ", t.name,
-						" but no reports returned!")
-				}
+			reports = append(reports, parsedDoc.GetNoModelReport(status == Unknown)...)
 
-				reports = append(reports, repsOfShape...)
+			allValid = len(reports) == 0
+		} else {
+			for _, v := range parsedDoc.shapeNames {
+				// var reportsFromShape []ValidationResult
+
+				switch t := v.(type) {
+				case *NodeShape:
+					if t.deactivated {
+						continue
+					}
+					// fmt.Println("Computing VRs for shape ", t.GetIRI())
+					valid, reportsOfShape := parsedDoc.GetValidationReport(t, ep)
+					if !valid {
+						allValid = false
+					}
+					if !valid && len(reportsOfShape) == 0 {
+						log.Panic("Reporting not valid for NodeSHape ", t.IRI,
+							" but no reports returned!")
+					}
+
+					reports = append(reports, reportsOfShape...)
+				case *PropertyShape:
+					if t.shape.deactivated {
+						continue
+					}
+					// fmt.Println("Computing VRs for shape ", t.GetIRI())
+					valid, repsOfShape := parsedDoc.GetVRProperty(t, ep, nil, "")
+					if !valid {
+						allValid = false
+					}
+
+					if !valid && len(repsOfShape) == 0 {
+						log.Panic("Reporting not valid for PropertyShape ", t.name,
+							" but no reports returned!")
+					}
+
+					reports = append(reports, repsOfShape...)
+				}
+			}
+
+			if !silent && config.semantics == "stable-cautious" && status == Invalid {
+				fmt.Fprintln(os.Stderr, "Note: the report shows one counter-model; other targets may also fail in other stable models.")
 			}
 		}
+
 		// reports = removeDuplicateVR(reports)
 		d = time.Since(start)
 		msec = d.Seconds() * float64(time.Second/time.Millisecond)
@@ -601,7 +621,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 		actual.conforms = res
 	}
 
-	if !omitVR && allValid != res {
+	if !omitVR && allValid != res && status != NoModel && status != Unknown {
 
 		if parsedDoc.IsRecursive() || forceLP {
 			fmt.Println("\nGenerated LP: ", lp)
@@ -937,14 +957,6 @@ func main() {
 	shaclDoc, err := os.Open(string(opts.ShaclDoc))
 	check(err)
 	defer shaclDoc.Close()
-
-	// Until later phase, set omitVR when under stable semantics, since the VR generation is not yet implemented for that case.
-	if opts.Semantics != "well-founded" {
-		if opts.OutputVR != "" {
-			fmt.Fprintln(os.Stderr, "Validation reports are not yet supported under stable semantics; no report is written.")
-		}
-		opts.OmitVR = true
-	}
 
 	var vrOutFile *os.File
 	if !opts.OmitVR && opts.OutputVR != "" {

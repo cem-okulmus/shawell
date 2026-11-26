@@ -1410,3 +1410,61 @@ func (s *ShaclDocument) AdoptLPUndefinedAnswers(LPTables []Table[rdf.Term]) {
 		}
 	}
 }
+
+// GetNoModelReport is used to create the validation report in case of a NoModel solve status
+// being produced by clingo. Since there is no information on any shape assignment,
+// all targets of every shape are vacuously set to being violated
+// Note: this method assumes that MaterialiseTargets was called before! Will panic otherwise
+func (s ShaclDocument) GetNoModelReport(unknown bool) (out []ValidationResult) {
+
+	if !s.materialised {
+		log.Panicln("Cannot call GetNoModelReport before MaterialiseTarget!")
+	}
+
+	for name, shape := range s.shapeNames {
+
+		var nodeShape *NodeShape
+
+		switch t := shape.(type) {
+		case *NodeShape:
+			nodeShape = t
+		case *PropertyShape:
+			nodeShape = t.shape
+		}
+
+		if !shape.IsActive() {
+			continue
+		}
+
+		for row := range s.targets[name].IterRows() {
+
+			target := row[0]
+
+			messageMap := make(map[string]rdf.Term)
+
+			var component rdf.Term
+
+			if unknown {
+				messageMap["en"] = rdf.NewLiteral("Stable Model Returned Unknown")
+				component = rdf.NewResource(_shawell + "UnknownStableModelConstraintComponent")
+			} else {
+				messageMap["en"] = rdf.NewLiteral("no stable model exists")
+				component = rdf.NewResource(_shawell + "NoStableModelConstraintComponent")
+			}
+
+			vr := ValidationResult{
+				focusNode:                 target,
+				sourceShape:               nodeShape.IRI,
+				message:                   messageMap,
+				severity:                  nil, // leaving nil, will be written as sh:Violation
+				sourceConstraintComponent: component,
+				pathName:                  nil,
+				value:                     nil,
+			}
+
+			out = append(out, vr)
+		}
+	}
+
+	return out
+}
