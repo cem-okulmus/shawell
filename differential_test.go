@@ -78,9 +78,27 @@ type fzShape struct {
 }
 
 type fzDoc struct {
-	shapes []fzShape
-	edges  map[string][][2]string // predicate -> (subject, object)
-	types  map[string][]string    // node -> classes
+	shapes   []fzShape
+	edges    map[string][][2]string // predicate -> (subject, object)
+	types    map[string][]string    // node -> classes
+	universe fzUniverse             // the nodes and classes the document is built from
+}
+
+// fzUniverse lists the nodes and classes a document is built from. Blank node names start with "b", and literal
+// names are keys of fzLiteralValue. constants are IRIs or literals that only occur as values of sh:hasValue and
+// sh:in, never in the data.
+type fzUniverse struct {
+	iris, blanks, literals, classes, constants []string
+}
+
+// fzDefaultUniverse is the universe of the non-recursive documents of TestDifferentialValidation.
+var fzDefaultUniverse = fzUniverse{iris: fzIRINodes, blanks: fzBlankNodes, literals: fzLiterals, classes: fzClasses}
+
+// fzGen holds the settings of the document generator. In recursive mode, a shape may reference any shape,
+// including itself, so documents can have cycles, also through negation.
+type fzGen struct {
+	u         fzUniverse
+	recursive bool
 }
 
 func fzShapeName(i int) string { return fmt.Sprint("S", i) }
@@ -110,10 +128,13 @@ var fzUniqueKinds = map[string]bool{
 	"minLength": true, "maxLength": true, "languageIn": true, "uniqueLang": true, "closed": true,
 }
 
-func fzGenDoc(r *rand.Rand) fzDoc {
-	doc := fzDoc{edges: map[string][][2]string{}, types: map[string][]string{}}
-	subjects := append(append([]string{}, fzIRINodes...), fzBlankNodes...)
-	objects := append(append([]string{}, subjects...), fzLiterals...)
+// fzGenDoc generates a non-recursive document over the default universe.
+func fzGenDoc(r *rand.Rand) fzDoc { return fzGen{u: fzDefaultUniverse}.doc(r) }
+
+func (g fzGen) doc(r *rand.Rand) fzDoc {
+	doc := fzDoc{edges: map[string][][2]string{}, types: map[string][]string{}, universe: g.u}
+	subjects := append(append([]string{}, g.u.iris...), g.u.blanks...)
+	objects := append(append([]string{}, subjects...), g.u.literals...)
 	for _, p := range fzPreds {
 		for _, s := range subjects {
 			for _, o := range objects {
@@ -123,8 +144,8 @@ func fzGenDoc(r *rand.Rand) fzDoc {
 			}
 		}
 	}
-	for _, n := range fzIRINodes { // blank nodes stay untyped, so that they are never targets
-		for _, c := range fzClasses {
+	for _, n := range g.u.iris { // blank nodes stay untyped, so that they are never targets
+		for _, c := range g.u.classes {
 			if r.Float64() < 0.4 {
 				doc.types[n] = append(doc.types[n], c)
 			}
@@ -136,31 +157,46 @@ func fzGenDoc(r *rand.Rand) fzDoc {
 		var s fzShape
 		n := 1 + r.Intn(3)
 		for k := 0; k < n; k++ {
-			s.cons = append(s.cons, fzGenCons(r, i, numShapes, 2, s.cons, false))
+			s.cons = append(s.cons, g.cons(r, i, numShapes, 2, s.cons, false))
 		}
 		if r.Float64() < 0.15 {
 			s.cons = append(s.cons, fzCons{kind: "closed", flag: r.Float64() < 0.6})
 		}
+		if g.recursive { // few targets, so that more documents are valid and the verdicts say more
+			if i == 0 || r.Float64() < 0.15 {
+				s.targetNodes = append(s.targetNodes, g.u.iris[r.Intn(len(g.u.iris))])
+			}
+			doc.shapes = append(doc.shapes, s)
+			continue
+		}
 		if i == 0 {
-			s.targetNodes = append(s.targetNodes, fzIRINodes...)
+			s.targetNodes = append(s.targetNodes, g.u.iris...)
 		} else if r.Float64() < 0.3 {
-			s.targetNodes = append(s.targetNodes, fzIRINodes[r.Intn(len(fzIRINodes))])
+			s.targetNodes = append(s.targetNodes, g.u.iris[r.Intn(len(g.u.iris))])
 		}
 		if r.Float64() < 0.25 {
-			s.targetClass = fzClasses[r.Intn(len(fzClasses))]
+			s.targetClass = g.u.classes[r.Intn(len(g.u.classes))]
 		}
 		doc.shapes = append(doc.shapes, s)
 	}
 	return doc
 }
 
-func fzRefs(r *rand.Rand, self, numShapes, n int) []int {
+// refs picks n shapes for shape self to reference: any shape in recursive mode, otherwise only later shapes.
+func (g fzGen) refs(r *rand.Rand, self, numShapes, n int) []int {
 	var out []int
 	for k := 0; k < n; k++ {
-		out = append(out, self+1+r.Intn(numShapes-self-1))
+		if g.recursive {
+			out = append(out, r.Intn(numShapes))
+		} else {
+			out = append(out, self+1+r.Intn(numShapes-self-1))
+		}
 	}
 	return out
 }
+
+// canReference says whether shape self can reference some shape.
+func (g fzGen) canReference(self, numShapes int) bool { return g.recursive || self < numShapes-1 }
 
 func fzSubset(r *rand.Rand, from []string) []string {
 	var out []string
@@ -177,16 +213,16 @@ func fzSubset(r *rand.Rand, from []string) []string {
 
 func pick[T any](r *rand.Rand, xs ...T) T { return xs[r.Intn(len(xs))] }
 
-// fzGenCons generates a constraint for (the shape or property shape inside) shape self. siblings are
+// cons generates a constraint for (the shape or property shape inside) shape self. siblings are
 // the constraints generated so far for the same shape: they keep the kinds that SHACL allows only
 // once unique, and the qualified value shapes of sibling property shapes distinct.
-func fzGenCons(r *rand.Rand, self, numShapes, depth int, siblings []fzCons, inProperty bool) fzCons {
+func (g fzGen) cons(r *rand.Rand, self, numShapes, depth int, siblings []fzCons, inProperty bool) fzCons {
 	kinds := []string{"class", "hasValue", "property", "property", "in", "nodeKind", "datatype",
 		"minInclusive", "maxExclusive", "minLength", "maxLength", "pattern", "languageIn"}
 	if inProperty {
 		kinds = append(kinds, "uniqueLang", "equals", "disjoint")
 	}
-	if self < numShapes-1 {
+	if g.canReference(self, numShapes) {
 		kinds = append(kinds, "node", "not", "and", "or", "xone", "or")
 	}
 	var allowed []string
@@ -196,19 +232,19 @@ func fzGenCons(r *rand.Rand, self, numShapes, depth int, siblings []fzCons, inPr
 		}
 		allowed = append(allowed, k)
 	}
-	values := append(append([]string{}, fzIRINodes...), fzLiterals...)
+	values := append(append(append([]string{}, g.u.iris...), g.u.literals...), g.u.constants...)
 
 	switch kind := pick(r, allowed...); kind {
 	case "class":
-		return fzCons{kind: kind, class: pick(r, fzClasses...)}
+		return fzCons{kind: kind, class: pick(r, g.u.classes...)}
 	case "hasValue":
 		return fzCons{kind: kind, value: pick(r, values...)}
 	case "in":
 		return fzCons{kind: kind, list: fzSubset(r, values)}
 	case "node", "not":
-		return fzCons{kind: kind, refs: fzRefs(r, self, numShapes, 1)}
+		return fzCons{kind: kind, refs: g.refs(r, self, numShapes, 1)}
 	case "and", "or", "xone":
-		return fzCons{kind: kind, refs: fzRefs(r, self, numShapes, 1+r.Intn(3))}
+		return fzCons{kind: kind, refs: g.refs(r, self, numShapes, 1+r.Intn(3))}
 	case "nodeKind":
 		return fzCons{kind: kind, str: pick(r, "IRI", "BlankNode", "Literal", "BlankNodeOrIRI", "IRIOrLiteral", "BlankNodeOrLiteral")}
 	case "datatype":
@@ -226,11 +262,11 @@ func fzGenCons(r *rand.Rand, self, numShapes, depth int, siblings []fzCons, inPr
 	case "equals", "disjoint":
 		return fzCons{kind: kind, pred: pick(r, fzPreds...)}
 	default:
-		return fzCons{kind: "property", prop: fzGenProp(r, self, numShapes, depth-1, siblings)}
+		return fzCons{kind: "property", prop: g.prop(r, self, numShapes, depth-1, siblings)}
 	}
 }
 
-func fzGenProp(r *rand.Rand, self, numShapes, depth int, siblings []fzCons) *fzProp {
+func (g fzGen) prop(r *rand.Rand, self, numShapes, depth int, siblings []fzCons) *fzProp {
 	p := &fzProp{pred: pick(r, fzPreds...), inverse: r.Float64() < 0.2, minCount: -1, maxCount: -1}
 	if r.Float64() < 0.4 {
 		p.minCount = r.Intn(3)
@@ -240,16 +276,16 @@ func fzGenProp(r *rand.Rand, self, numShapes, depth int, siblings []fzCons) *fzP
 	}
 	n := r.Intn(3)
 	for k := 0; k < n; k++ {
-		p.cons = append(p.cons, fzGenCons(r, self, numShapes, depth, p.cons, true))
+		p.cons = append(p.cons, g.cons(r, self, numShapes, depth, p.cons, true))
 	}
-	if self < numShapes-1 && r.Float64() < 0.35 {
+	if g.canReference(self, numShapes) && r.Float64() < 0.35 {
 		used := make(map[int]bool)
 		for _, s := range siblings {
 			if s.kind == "property" && s.prop.qual != nil {
 				used[s.prop.qual.ref] = true
 			}
 		}
-		ref := fzRefs(r, self, numShapes, 1)[0]
+		ref := g.refs(r, self, numShapes, 1)[0]
 		if !used[ref] {
 			q := &fzQual{ref: ref, min: r.Intn(3), max: -1, disjoint: r.Float64() < 0.5}
 			if r.Float64() < 0.5 {
@@ -272,12 +308,19 @@ func fzHasKind(cons []fzCons, kind string) bool {
 
 // Turtle rendering
 
-func (d fzDoc) turtle() string {
-	var sb strings.Builder
-	sb.WriteString("@prefix sh: <http://www.w3.org/ns/shacl#> .\n")
-	sb.WriteString("@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n")
-	sb.WriteString("@prefix ex: <" + fzNS + "> .\n\n")
+const fzPrefixes = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n" +
+	"@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n" +
+	"@prefix ex: <" + fzNS + "> .\n\n"
 
+// turtle renders shapes and data as one document.
+func (d fzDoc) turtle() string { return fzPrefixes + d.shapesBody() + "\n" + d.dataBody() }
+
+// shapesTurtle and dataTurtle render the shapes and the data as separate documents.
+func (d fzDoc) shapesTurtle() string { return fzPrefixes + d.shapesBody() }
+func (d fzDoc) dataTurtle() string   { return fzPrefixes + d.dataBody() }
+
+func (d fzDoc) shapesBody() string {
+	var sb strings.Builder
 	for i, s := range d.shapes {
 		sb.WriteString(fmt.Sprintf("ex:%s a sh:NodeShape", fzShapeName(i)))
 		for _, t := range s.targetNodes {
@@ -294,13 +337,17 @@ func (d fzDoc) turtle() string {
 		}
 		sb.WriteString(" .\n")
 	}
-	sb.WriteString("\n")
+	return sb.String()
+}
+
+func (d fzDoc) dataBody() string {
+	var sb strings.Builder
 	for _, p := range fzPreds {
 		for _, e := range d.edges[p] {
 			sb.WriteString(fmt.Sprintf("%s ex:%s %s .\n", fzTerm(e[0]), p, fzTerm(e[1])))
 		}
 	}
-	for _, n := range fzIRINodes {
+	for _, n := range d.universe.iris {
 		for _, c := range d.types[n] {
 			sb.WriteString(fmt.Sprintf("%s rdf:type ex:%s .\n", fzTerm(n), c))
 		}
@@ -379,9 +426,26 @@ func (c fzCons) turtle(indent string) string {
 
 // reference semantics
 
+// fzRef evaluates the constraints of a document. Without an interpretation (pos and neg nil), shape references
+// are resolved by evaluating the referenced shape, which needs a non-recursive document. With one, they are
+// looked up: an occurrence of a shape with positive polarity reads pos, one with negative polarity reads neg
+// (see member and stable_oracle_test.go).
 type fzRef struct {
-	doc  fzDoc
-	memo map[string]bool
+	doc      fzDoc
+	memo     map[string]bool
+	pos, neg fzInterp
+}
+
+// member says whether node n conforms to shape, for an occurrence of the shape with the given polarity.
+func (r *fzRef) member(n string, shape int, positive bool) bool {
+	switch {
+	case r.pos == nil:
+		return r.conforms(n, shape)
+	case positive:
+		return r.pos[fzAtom{shape, n}]
+	default:
+		return r.neg[fzAtom{shape, n}]
+	}
 }
 
 func (r *fzRef) values(focus string, pred string, inverse bool) []string {
@@ -467,24 +531,39 @@ func (r *fzRef) holds(n string, c fzCons, parentCons []fzCons) bool {
 		}
 		return false
 	case "node":
-		return r.conforms(n, c.refs[0])
+		return r.member(n, c.refs[0], true)
 	case "not":
-		return !r.conforms(n, c.refs[0])
-	case "and", "or", "xone":
-		count := 0
+		return !r.member(n, c.refs[0], false)
+	case "and":
 		for _, ref := range c.refs {
-			if r.conforms(n, ref) {
-				count++
+			if !r.member(n, ref, true) {
+				return false
 			}
 		}
-		switch c.kind {
-		case "and":
-			return count == len(c.refs)
-		case "or":
-			return count > 0
-		default:
-			return count == 1
+		return true
+	case "or":
+		for _, ref := range c.refs {
+			if r.member(n, ref, true) {
+				return true
+			}
 		}
+		return false
+	case "xone": // some member conforms, and none of the others: the others occur negatively
+		for i, ref := range c.refs {
+			if !r.member(n, ref, true) {
+				continue
+			}
+			others := true
+			for j, other := range c.refs {
+				if j != i && r.member(n, other, false) {
+					others = false
+				}
+			}
+			if others {
+				return true
+			}
+		}
+		return false
 	case "nodeKind":
 		kind := "IRI"
 		if fzIsBlank(n) {
@@ -600,20 +679,25 @@ func (r *fzRef) propertyHolds(focus string, p *fzProp, parentCons []fzCons) bool
 				}
 			}
 		}
-		count := 0
-		for _, v := range vals {
-			if !r.conforms(v, q.ref) {
-				continue
+		// count counts the value nodes that conform to the qualified shape and to none of the siblings. A lower
+		// bound reads the qualified shape positively and the siblings negatively, an upper bound the reverse.
+		count := func(positive bool) int {
+			k := 0
+			for _, v := range vals {
+				if !r.member(v, q.ref, positive) {
+					continue
+				}
+				inSibling := false
+				for _, s := range siblings {
+					inSibling = inSibling || r.member(v, s, !positive)
+				}
+				if !inSibling {
+					k++
+				}
 			}
-			inSibling := false
-			for _, s := range siblings {
-				inSibling = inSibling || r.conforms(v, s)
-			}
-			if !inSibling {
-				count++
-			}
+			return k
 		}
-		if count < q.min || (q.max >= 0 && count > q.max) {
+		if count(true) < q.min || (q.max >= 0 && count(false) > q.max) {
 			return false
 		}
 	}
@@ -630,7 +714,7 @@ func (d fzDoc) expectedInvalid() map[string]map[string]bool {
 			targets[t] = true
 		}
 		if s.targetClass != "" {
-			for _, n := range fzIRINodes {
+			for _, n := range d.universe.iris {
 				if ref.hasType(n, s.targetClass) {
 					targets[n] = true
 				}

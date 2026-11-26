@@ -969,7 +969,7 @@ func (s ShaclDocument) GetVRProperty(p *PropertyShape, ep endpoint, targetsFromP
 					// }
 				}
 
-				if isIn != 1 || undefined > 0 {
+				if in != 1 || undefined > 0 {
 					report := ValidationResult{
 						focusNode:                 target,
 						pathName:                  p.path,

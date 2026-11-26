@@ -262,11 +262,23 @@ func Compliance(t *testing.T, forceLP bool) EARLReport {
 		return EARLReport{}
 	}
 
-	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: GraphDB 11.5.3")
+	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: GraphDB 11.5.3", "well-founded")
 }
 
 func ComplianceOxigraph(t *testing.T, forceLP bool) EARLReport {
+	return ComplianceOxigraphSemantics(t, forceLP, "well-founded")
+}
+
+// ComplianceOxigraphSemantics runs the SHACL Test Suite Core on a local Oxigraph instance under the given semantics.
+func ComplianceOxigraphSemantics(t *testing.T, forceLP bool, semantics string) EARLReport {
 	ensureDependencies(true, false)
+	if semantics != "well-founded" {
+		cmd, err := findClingo("")
+		if err != nil {
+			t.Skip("clingo not available:", err)
+		}
+		clingoCmd = cmd
+	}
 
 	dlv = "bin/dlv"
 
@@ -277,10 +289,10 @@ func ComplianceOxigraph(t *testing.T, forceLP bool) EARLReport {
 	}
 	defer cleanup()
 
-	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: Oxigraph")
+	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: Oxigraph", semantics)
 }
 
-func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEndpoint, earlInfo string) EARLReport {
+func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEndpoint, earlInfo, semantics string) EARLReport {
 	var tests = CoreTests()
 
 	countPassed := 0
@@ -331,7 +343,7 @@ func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEn
 		res := ep.Insert(g2, "<"+_sh+fileName+">", false)
 		check(res)
 		graphName = "<" + _sh + fileName + ">"
-		parsedDoc := GetShaclDocument(g2, graphName, false, "well-founded")
+		parsedDoc := GetShaclDocument(g2, graphName, false, semantics)
 		parsedDoc.debug = false
 		activeDoc = &parsedDoc
 
@@ -343,15 +355,24 @@ func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEn
 			forceLP:     forceLP,
 			onlyLP:      false,
 			onlyQueries: false,
-			semantics:   "well-founded",
+			semantics:   semantics,
 		}
 
-		actual := answerShacl(ep, parsedDoc, config)
+		// a panic fails this test only, instead of ending the test binary and every test after it
+		var actual *ValidationReport
+		panicked := noPanic(func() { actual = answerShacl(ep, parsedDoc, config) })
 
 		//ClearData
 
 		err = ep.ClearGraph("<" + _sh + fileName + ">")
 		check(err)
+
+		if panicked != nil {
+			t.Error(color.New(color.FgRed).Sprint("For test: ", testString, " panicked: ", panicked))
+			earl.AddTestResult("/core"+testStringCompact, earlInfo, failed)
+			fmt.Print("panicked\n")
+			continue
+		}
 
 		result := actual.conforms == VR.conforms
 
@@ -424,4 +445,22 @@ func TestLPMatchesUnwindingOxigraph(t *testing.T) {
 	}
 
 	green.Println("Logic Program and Unwinding produce _exactly_ same result (Oxigraph).")
+}
+
+// TestComplianceStableOxigraph runs the SHACL Test Suite Core in both stable modes, with and without forceLP
+// (phase 5, step 5 of stable_semantics_plan.md). None of its documents is recursive through negation, so each
+// has a single stable model, and every result must match the well-founded run without forceLP. The documents
+// hold data and shapes in one graph, so the stable domain includes the shapes' nodes; that changes nothing
+// for such documents either.
+func TestComplianceStableOxigraph(t *testing.T) {
+	earl := ComplianceOxigraph(t, false)
+	reference := earl.String()
+	for _, semantics := range []string{"stable-brave", "stable-cautious"} {
+		for _, forceLP := range []bool{false, true} {
+			earl := ComplianceOxigraphSemantics(t, forceLP, semantics)
+			if got := earl.String(); got != reference {
+				t.Errorf("%s (forceLP %v): the EARL report differs from the well-founded one", semantics, forceLP)
+			}
+		}
+	}
 }

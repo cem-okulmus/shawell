@@ -322,6 +322,9 @@ func (p serialisedProgram) runClingo(debug bool) (LPOutput, solveStatus) {
 	var outputLP strings.Builder
 	outputLP.WriteString(p.String())
 
+	// write this in case the following loop is empty, to ensure syntactic correctness
+	fmt.Fprintf(&outputLP, "#show. \n")
+
 	for s := range shapes {
 		fmt.Fprint(&outputLP, "#show ", s, "/1 .\n")
 	}
@@ -606,17 +609,11 @@ func expandRules(valuesSlice []rdf.Term, indices []int, deps []dependency, heade
 			ref := deps[i].name[0].GetLogName() // like not, qualified can only have single reference
 
 			// When disjoint, any node matching a sibling qualified shape is excluded from counting.
-			// Siblings are all other qualified deps not belonging to the current column (indices).
+			// Siblings refs are computed in GetShaclDocument
 			var siblingRefs []string
 			if deps[i].disjoint {
-				inCurrent := make(map[int]bool)
-				for _, idx := range indices {
-					inCurrent[idx] = true
-				}
-				for si, d := range deps {
-					if d.mode == qualified && !inCurrent[si] {
-						siblingRefs = append(siblingRefs, d.name[0].GetLogName())
-					}
+				for _, sib := range deps[i].siblings {
+					siblingRefs = append(siblingRefs, sib.GetLogName())
 				}
 			}
 

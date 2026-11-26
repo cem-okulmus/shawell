@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -86,12 +87,16 @@ type depSpec struct {
 	refs     []int
 	min, max int // only for qualified; max == -1 means unbounded
 	disjoint bool
+	siblings []int // only for disjoint qualified: the sibling shapes, as GetShaclDocument computes them
 }
 
 func (d depSpec) String() string {
 	var refs []string
 	for _, r := range d.refs {
 		refs = append(refs, fmt.Sprint("shape", r))
+	}
+	if d.mode == qualified && d.disjoint {
+		return fmt.Sprintf("qualified(%s, min=%d, max=%d, disjoint from %v)", strings.Join(refs, ","), d.min, d.max, d.siblings)
 	}
 	if d.mode == qualified {
 		return fmt.Sprintf("qualified(%s, min=%d, max=%d, disjoint=%v)", strings.Join(refs, ","), d.min, d.max, d.disjoint)
@@ -104,11 +109,15 @@ func (d depSpec) dependency() dependency {
 	for _, id := range d.refs {
 		names = append(names, ShapeRef{ref: &NodeShape{id: int64(id)}})
 	}
+	var siblings []ShapeRef
+	for _, id := range d.siblings {
+		siblings = append(siblings, ShapeRef{ref: &NodeShape{id: int64(id)}})
+	}
 	max := d.max
 	if d.mode != qualified {
 		max = -1
 	}
-	return dependency{mode: d.mode, name: names, min: d.min, max: max, disjoint: d.disjoint}
+	return dependency{mode: d.mode, name: names, min: d.min, max: max, disjoint: d.disjoint, siblings: siblings}
 }
 
 func qual1(ref, min, max int) depSpec {
@@ -116,7 +125,6 @@ func qual1(ref, min, max int) depSpec {
 }
 
 // expansion is one call of expandRules: a head predicate and the dependencies of the expanded column.
-// Dependencies in deps but not in cols act as siblings (relevant for sh:qualifiedValueShapesDisjoint).
 type expansion struct {
 	header string
 	deps   []depSpec
@@ -188,8 +196,8 @@ func conforms(deps []depSpec, cols []int, numValues int, w world) bool {
 				}
 				excluded := false
 				if d.disjoint {
-					for si, s := range deps {
-						if s.mode == qualified && !inCols[si] && w[s.refs[0]][v] {
+					for _, s := range d.siblings {
+						if w[s][v] {
 							excluded = true
 						}
 					}
@@ -408,7 +416,7 @@ func refsOf(deps []depSpec) []int {
 	seen := make(map[int]bool)
 	var out []int
 	for _, d := range deps {
-		for _, r := range d.refs {
+		for _, r := range append(slices.Clone(d.refs), d.siblings...) {
 			if !seen[r] {
 				seen[r] = true
 				out = append(out, r)
@@ -511,13 +519,21 @@ func TestExpandRulesThreeDependencies(t *testing.T) {
 }
 
 // TestExpandRulesQualifiedDisjoint checks sh:qualifiedValueShapesDisjoint, where value nodes
-// conforming to a sibling qualified shape (another column) are not counted.
+// conforming to a sibling shape are not counted. The siblings come with the dependency (computed by
+// GetShaclDocument), so they count whether or not their own dependencies are expanded in the same call.
+// The last two cases are the standalone encoding of a property shape (known bug Z): its dependency list
+// holds only its own qualified value shape, and the sibling is not in it.
 func TestExpandRulesQualifiedDisjoint(t *testing.T) {
+	disjoint := func(min, max int, siblings ...int) depSpec {
+		return depSpec{mode: qualified, refs: []int{1}, min: min, max: max, disjoint: true, siblings: siblings}
+	}
 	cases := [][]depSpec{
-		{{mode: qualified, refs: []int{1}, min: 1, max: -1, disjoint: true}, qual1(2, 1, -1)},
-		{{mode: qualified, refs: []int{1}, min: 1, max: 1, disjoint: true}, qual1(2, 0, -1), qual1(3, 0, -1)},
-		{{mode: qualified, refs: []int{1}, min: 0, max: 1, disjoint: true}, qual1(2, 1, -1)},
-		{{mode: qualified, refs: []int{1}, min: 2, max: -1, disjoint: true}, qual1(2, 1, -1)},
+		{disjoint(1, -1, 2), qual1(2, 1, -1)},
+		{disjoint(1, 1, 2, 3), qual1(2, 0, -1), qual1(3, 0, -1)},
+		{disjoint(0, 1, 2), qual1(2, 1, -1)},
+		{disjoint(2, -1, 2), qual1(2, 1, -1)},
+		{disjoint(1, -1, 2)},
+		{disjoint(1, 1, 2, 3)},
 	}
 	for _, deps := range cases {
 		t.Run(depsName(deps), func(t *testing.T) {
@@ -760,6 +776,36 @@ func TestXone(t *testing.T) {
 			invalid: "S={n1,n2}",
 		},
 	})
+}
+
+// TestXoneReport checks the validation report of sh:xone in a property shape (known bug X): it must report the
+// value nodes that conform to none or to several of the shapes, and no others. The same document as the
+// property-shape case of TestXone: n1 and n2 are invalid, n0 is valid.
+func TestXoneReport(t *testing.T) {
+	ep := startTestOxigraph(t)
+	turtle := `ex:S a sh:NodeShape ; sh:targetNode ex:n0 , ex:n1 , ex:n2 ;
+	             sh:property [ sh:path ex:p ; sh:xone ( ex:SA ex:SB ) ] .
+	           ex:n0 ex:p ex:a , ex:b . ex:n1 ex:p ex:a , ex:c . ex:n2 ex:p ex:a , ex:ab .`
+	for i, forceLP := range []bool{false, true} {
+		path := map[bool]string{false: "unwinding", true: "logic-program"}[forceLP]
+		t.Run(path, func(t *testing.T) {
+			graphName := fmt.Sprintf("<urn:xone-report:%d>", i)
+			g := loadTurtle(t, ep, graphName, recPrefixes+logicalShapes+turtle)
+			report, err := shawellReport(g, ep, graphName, forceLP)
+			if err != nil {
+				t.Fatalf("panic: %v", err)
+			}
+			var got []string
+			for _, r := range report.results {
+				got = append(got, strings.TrimPrefix(r.focusNode.RawValue(), fzNS)+" "+
+					strings.TrimPrefix(r.value.RawValue(), fzNS))
+			}
+			sort.Strings(got)
+			if want := "n1 c, n2 ab"; strings.Join(got, ", ") != want {
+				t.Errorf("results (focus node, value) %q, expected %q", strings.Join(got, ", "), want)
+			}
+		})
+	}
 }
 
 // TestAnd checks that sh:and requires each value node to conform to all of the listed shapes (known

@@ -1,0 +1,21 @@
+# cx4: true in every model by case split, though neither disjunct is
+#
+# From Appendix B of stable_semantics_plan.md; TestStableModels (stable_models_test.go) checks the same case
+# and TestStableModelsFiles checks that this file matches it. Run it with
+#   shawell -l -i -s resources/stable_models/cx4.ttl -m <semantics>
+# Expected verdicts (exit codes):
+#   well-founded     invalid (3)
+#   stable-brave     valid (0)
+#   stable-cautious  valid (0)
+
+@prefix : <http://example.org/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+# data
+:a :q :b .
+
+# shapes
+:A a sh:NodeShape ; sh:not :B .
+:B a sh:NodeShape ; sh:not :A .
+:S a sh:NodeShape ; sh:targetNode :a ; sh:or ( :A :B ) .
+

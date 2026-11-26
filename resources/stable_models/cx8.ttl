@@ -1,0 +1,19 @@
+# cx8: odd loop fires only at :z, a constant in no data triple, so Const(C) decides
+#
+# From Appendix B of stable_semantics_plan.md; TestStableModels (stable_models_test.go) checks the same case
+# and TestStableModelsFiles checks that this file matches it. Run it with
+#   shawell -l -i -s resources/stable_models/cx8.ttl -m <semantics>
+# Expected verdicts (exit codes):
+#   well-founded     valid (0)
+#   stable-brave     no model (4)
+#   stable-cautious  no model (4)
+
+@prefix : <http://example.org/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+# data
+:a :q :b .
+
+# shapes
+:U a sh:NodeShape ; sh:targetNode :a ; sh:or ( [ sh:hasValue :a ] [ sh:hasValue :b ] [ sh:not :U ] ) .
+:C a sh:NodeShape ; sh:hasValue :z .

@@ -1105,6 +1105,10 @@ func main() {
 	// Main Routine
 	vr := answerShacl(endpoint, parsedDoc, config)
 
+	if vr == nil {
+		return // in demo mode
+	}
+
 	if !vr.conforms {
 		switch vr.status {
 		case Valid:

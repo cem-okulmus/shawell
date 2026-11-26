@@ -25,7 +25,7 @@ const (
 
 type dependency struct {
 	name      []ShapeRef    // the references used in a node-referring constraint inside a shape
-	disjoint  bool          // used to indicate  we have a qualifiedValueShape constraint with disjointedness
+	disjoint  bool          // used to indicate that we have a qualifiedValueShape constraint with disjointedness
 	path      *PropertyPath // for external dep, store the path
 	origin    string        // the (node or property) shape the dependency originates from
 	originDep *dependency   // nil if not indirectDep
@@ -33,6 +33,7 @@ type dependency struct {
 	mode      depMode       // the type of reference that is used
 	min       int           // used by qualifiedValueShape
 	max       int           // used by qualifiedValueShape
+	siblings  []ShapeRef    // used by qualifiedValueShape
 }
 
 type ShaclDocument struct {
@@ -382,6 +383,46 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool, semanti
 		}
 	}
 
+	// lastly, compute the "sibling shapes", needed for qualifiedValueShape constraints
+
+	// siblings of each property shape, keyed by its qualified name (the origin of its dependencies): the
+	// qualified value shapes of the other property shapes of all its parents, minus its own (SHACL W3C Rec, 4.7.3)
+	siblings := map[string][]ShapeRef{}
+	for _, x := range out.shapeNames {
+		var props []*PropertyShape
+		switch t := x.(type) {
+		case *NodeShape:
+			props = t.properties
+		case *PropertyShape:
+			props = t.shape.properties
+		}
+		for _, p := range props {
+			own := map[string]bool{}
+			for _, qs := range p.shape.qualifiedShapes {
+				own[qs.shape.name] = true
+			}
+			for _, q := range props {
+				if q == p {
+					continue
+				}
+				for _, qs := range q.shape.qualifiedShapes {
+					if !own[qs.shape.name] {
+						siblings[p.GetQualName()] = append(siblings[p.GetQualName()], qs.shape)
+					}
+				}
+			}
+		}
+	}
+
+	// copy them onto every disjoint qualified dependency: the property shape's own, and the copies in its parents
+	for _, x := range out.shapeNames {
+		deps := x.GetDeps()
+		for i := range deps {
+			if deps[i].mode == qualified && deps[i].disjoint {
+				deps[i].siblings = siblings[deps[i].origin]
+			}
+		}
+	}
 	return out
 }
 

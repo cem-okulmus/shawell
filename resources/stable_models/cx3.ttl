@@ -1,0 +1,20 @@
+# cx3: even loop, one target
+#
+# From Appendix B of stable_semantics_plan.md; TestStableModels (stable_models_test.go) checks the same case
+# and TestStableModelsFiles checks that this file matches it. Run it with
+#   shawell -l -i -s resources/stable_models/cx3.ttl -m <semantics>
+# Expected verdicts (exit codes):
+#   well-founded     invalid (3)
+#   stable-brave     valid (0)
+#   stable-cautious  invalid (3)
+
+@prefix : <http://example.org/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+# data
+:a :q :b .
+
+# shapes
+:A a sh:NodeShape ; sh:targetNode :a ; sh:not :B .
+:B a sh:NodeShape ; sh:not :A .
+
