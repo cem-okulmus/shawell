@@ -227,10 +227,10 @@ func TestStableModels(t *testing.T) {
 
 	for _, c := range stableModelsCases {
 		for _, mode := range []struct {
-			semantics string
+			semantics Semantics
 			want      stableModelsExpectation
-		}{{"well-founded", c.wf}, {"stable-brave", c.brave}, {"stable-cautious", c.cautious}} {
-			t.Run(c.name+"/"+mode.semantics, func(t *testing.T) {
+		}{{WellFounded{}, c.wf}, {StableBrave{}, c.brave}, {StableCautious{}, c.cautious}} {
+			t.Run(c.name+"/"+mode.semantics.String(), func(t *testing.T) {
 				report := validateSeparateGraphs(t, ep, "stablemodels", stableModelsPrefixes+c.data,
 					stableModelsPrefixes+c.shapes, config{silent: true, semantics: mode.semantics})
 				checkStableModelsReport(t, report, mode.want)
@@ -278,8 +278,8 @@ func TestStableModelsUnknownReport(t *testing.T) {
 	cx5 := stableModelsCases[slices.IndexFunc(stableModelsCases, func(c stableModelsCase) bool {
 		return strings.HasPrefix(c.name, "cx5 ")
 	})]
-	for _, semantics := range []string{"stable-brave", "stable-cautious"} {
-		t.Run(semantics, func(t *testing.T) {
+	for _, semantics := range []Semantics{StableBrave{}, StableCautious{}} {
+		t.Run(semantics.String(), func(t *testing.T) {
 			report := validateSeparateGraphs(t, ep, "stablemodels", stableModelsPrefixes+cx5.data,
 				stableModelsPrefixes+cx5.shapes, config{silent: true, semantics: semantics})
 			checkStableModelsReport(t, report, stableModelsExpectation{Unknown, "A@a B@a"})

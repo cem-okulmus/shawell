@@ -741,14 +741,14 @@ func shawellInvalid(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP 
 
 	renameMap = make(map[rdf.Term]string)
 	reverseMap = make(map[string]rdf.Term)
-	doc := GetShaclDocument(g, graphName, false, "well-founded")
+	doc := GetShaclDocument(g, graphName, false, WellFounded{})
 	activeDoc = &doc
 	doc.AllCondAnswers(ep)
 
 	var tables map[string]Table[rdf.Term]
 	if forceLP || doc.IsRecursive() {
 		lp := doc.GetAllLPs()
-		lpTables, undefined, _ := lp.Answer(false, false, "well-founded")
+		lpTables, undefined, _ := lp.Answer(false, false, WellFounded{})
 		if err := doc.AdoptLPAnswers(lpTables); err != nil {
 			panic(err)
 		}
@@ -775,9 +775,9 @@ func shawellInvalid(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP 
 // the report agrees with the verdict.
 func shawellReport(g *rdf.Graph, ep *SparqlEndpoint, graphName string, forceLP bool) (report *ValidationReport, err any) {
 	defer func() { err = recover() }()
-	doc := GetShaclDocument(g, graphName, false, "well-founded")
+	doc := GetShaclDocument(g, graphName, false, WellFounded{})
 	activeDoc = &doc
-	return answerShacl(ep, doc, config{silent: true, forceLP: forceLP, semantics: "well-founded"}), nil
+	return answerShacl(ep, doc, config{silent: true, forceLP: forceLP, semantics: WellFounded{}}), nil
 }
 
 // noPanic runs f and returns a recovered panic, if any.
@@ -898,7 +898,7 @@ func TestDifferentialValidation(t *testing.T) {
 
 			// printing the parsed document walks all nested shapes, with and without blank shapes
 			for _, debug := range []bool{false, true} {
-				parsed := GetShaclDocument(g, graphName, false, "well-founded")
+				parsed := GetShaclDocument(g, graphName, false, WellFounded{})
 				parsed.debug = debug
 				if err := noPanic(func() { _ = parsed.String() }); err != nil {
 					problems = append(problems, fmt.Sprintf("ShaclDocument.String (debug=%v): panic: %v", debug, err))

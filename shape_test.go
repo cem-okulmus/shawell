@@ -100,7 +100,7 @@ func TestShapeParsingErrors(t *testing.T) {
 			var recovered any
 			func() {
 				defer func() { recovered = recover() }()
-				GetShaclDocument(g, "<"+_sh+"parsing>", false, "well-founded")
+				GetShaclDocument(g, "<"+_sh+"parsing>", false, WellFounded{})
 			}()
 			if c.malformed && recovered == nil {
 				t.Fatal("malformed shape was parsed without an error")
@@ -123,7 +123,7 @@ ex:a ex:q ex:b .
 ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:q ; sh:class ex:C ] .
 ex:T a sh:NodeShape ; sh:or ( [ sh:hasValue ex:z ] [ sh:in ( ex:b "w" ) ] ) .
 `
-	parse := func(semantics string) ShaclDocument {
+	parse := func(semantics Semantics) ShaclDocument {
 		g := rdf.NewGraph(_sh)
 		if err := g.Parse(strings.NewReader(doc), "text/turtle"); err != nil {
 			t.Fatal(err)
@@ -164,15 +164,15 @@ ex:T a sh:NodeShape ; sh:or ( [ sh:hasValue ex:z ] [ sh:in ( ex:b "w" ) ] ) .
 
 	const ex = "http://example.org/domain#"
 	constC := []string{ex + "a", ex + "z", ex + "b", "w", ex + "C"} // targetNode, hasValue, in (IRI and literal), class
-	wf := parse("well-founded")
+	wf := parse(WellFounded{})
 	for name, shape := range wf.shapeNames {
 		if hasDomain(shape.GetTargets(true)) {
 			t.Errorf("well-founded: shape %s has the domain target", name)
 		}
 	}
 
-	for _, semantics := range []string{"stable-brave", "stable-cautious"} {
-		t.Run(semantics, func(t *testing.T) {
+	for _, semantics := range []Semantics{StableBrave{}, StableCautious{}} {
+		t.Run(semantics.String(), func(t *testing.T) {
 			stable := parse(semantics)
 			if len(stable.shapeNames) != len(wf.shapeNames) {
 				t.Fatalf("got %d shapes, well-founded has %d", len(stable.shapeNames), len(wf.shapeNames))

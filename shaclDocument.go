@@ -229,7 +229,7 @@ Outer:
 //   - rdfGraph: RDF graph parsed from Turtle or other RDF format
 //   - fromGraph: the named graph URI where the data is stored
 //   - debug: enables debug output during parsing
-func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool, semantics string) (out ShaclDocument) {
+func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool, semantics Semantics) (out ShaclDocument) {
 	// var detected bool = true
 	out.shapeNames = make(map[string]Shape)
 	out.condAnswers = make(map[string]Table[rdf.Term])
@@ -279,7 +279,7 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool, semanti
 	// Add Const Targets in case of Stable Model Semantics
 	var ConstsToAdd []rdf.Term
 
-	if semantics == "stable-brave" || semantics == "stable-cautious" {
+	if semantics.twoValued() {
 		for _, shape := range out.shapeNames {
 
 			var nodeShape *NodeShape
@@ -357,7 +357,7 @@ func GetShaclDocument(rdfGraph *rdf.Graph, fromGraph string, debug bool, semanti
 
 		}
 		// add TargetDomain to every shape in stable seamntics
-		if semantics == "stable-brave" || semantics == "stable-cautious" {
+		if semantics.twoValued() {
 			add(shapeName, []TargetIndirect{{actual: TargetDomain{}}})
 			for _, term := range ConstsToAdd {
 				add(shapeName, []TargetIndirect{{actual: TargetNode{node: term}}})

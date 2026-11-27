@@ -432,15 +432,15 @@ func (p serialisedProgram) runDLV(debug bool, nofacts bool) LPOutput {
 
 // Answer sends the logic program to DLV configured for well-founded semantics or clingo and returns the computed interpretation.
 // Returns (true tables, undefined tables), each grouped by predicate arity.
-func (p serialisedProgram) Answer(debug bool, nofacts bool, semantics string) ([]Table[rdf.Term], []Table[rdf.Term], solveStatus) {
+func (p serialisedProgram) Answer(debug bool, nofacts bool, semantics Semantics) ([]Table[rdf.Term], []Table[rdf.Term], solveStatus) {
 
 	var out LPOutput
 	var solveStatus solveStatus
-	switch semantics {
-	case "well-founded":
+	switch semantics.(type) {
+	case WellFounded:
 		out = p.runDLV(debug, nofacts)
 		solveStatus = satisfiable
-	case "stable-brave", "stable-cautious":
+	case StableBrave, StableCautious, SupportedBrave, SupportedCautious:
 		out, solveStatus = p.runClingo(debug)
 	default:
 		log.Panicln("Unknown semantics or not yet implemented: ", semantics)

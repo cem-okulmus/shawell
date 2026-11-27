@@ -262,17 +262,17 @@ func Compliance(t *testing.T, forceLP bool) EARLReport {
 		return EARLReport{}
 	}
 
-	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: GraphDB 11.5.3", "well-founded")
+	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: GraphDB 11.5.3", WellFounded{})
 }
 
 func ComplianceOxigraph(t *testing.T, forceLP bool) EARLReport {
-	return ComplianceOxigraphSemantics(t, forceLP, "well-founded")
+	return ComplianceOxigraphSemantics(t, forceLP, WellFounded{})
 }
 
 // ComplianceOxigraphSemantics runs the SHACL Test Suite Core on a local Oxigraph instance under the given semantics.
-func ComplianceOxigraphSemantics(t *testing.T, forceLP bool, semantics string) EARLReport {
+func ComplianceOxigraphSemantics(t *testing.T, forceLP bool, semantics Semantics) EARLReport {
 	ensureDependencies(true, false)
-	if semantics != "well-founded" {
+	if semantics.twoValued() {
 		cmd, err := findClingo("")
 		if err != nil {
 			t.Skip("clingo not available:", err)
@@ -292,7 +292,7 @@ func ComplianceOxigraphSemantics(t *testing.T, forceLP bool, semantics string) E
 	return ComplianceWithEndpoint(t, forceLP, false, ep, "Sparql engine being used: Oxigraph", semantics)
 }
 
-func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEndpoint, earlInfo, semantics string) EARLReport {
+func ComplianceWithEndpoint(t *testing.T, forceLP, earlOutput bool, ep *SparqlEndpoint, earlInfo string, semantics Semantics) EARLReport {
 	var tests = CoreTests()
 
 	countPassed := 0
@@ -455,11 +455,11 @@ func TestLPMatchesUnwindingOxigraph(t *testing.T) {
 func TestComplianceStableOxigraph(t *testing.T) {
 	earl := ComplianceOxigraph(t, false)
 	reference := earl.String()
-	for _, semantics := range []string{"stable-brave", "stable-cautious"} {
+	for _, semantics := range []Semantics{StableBrave{}, StableCautious{}} {
 		for _, forceLP := range []bool{false, true} {
 			earl := ComplianceOxigraphSemantics(t, forceLP, semantics)
 			if got := earl.String(); got != reference {
-				t.Errorf("%s (forceLP %v): the EARL report differs from the well-founded one", semantics, forceLP)
+				t.Errorf("%s (forceLP %v): the EARL report differs from the well-founded one", semantics.String(), forceLP)
 			}
 		}
 	}

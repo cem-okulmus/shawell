@@ -462,7 +462,7 @@ func lpModels(t *testing.T, clingo []string, program string) (fromDLV, fromCling
 
 // fzRunShawell validates the document whose data is in graphName with the given semantics, and returns the
 // report, or the recovered panic.
-func fzRunShawell(shapes *rdf.Graph, ep *SparqlEndpoint, graphName, semantics string, forceLP bool) (report *ValidationReport, err any) {
+func fzRunShawell(shapes *rdf.Graph, ep *SparqlEndpoint, graphName string, semantics Semantics, forceLP bool) (report *ValidationReport, err any) {
 	defer func() { err = recover() }()
 	doc := GetShaclDocument(shapes, graphName, false, semantics)
 	activeDoc = &doc
@@ -477,7 +477,7 @@ func fzStableLP(shapes *rdf.Graph, ep *SparqlEndpoint, graphName string) (progra
 	defer func() { err = recover() }()
 	renameMap = make(map[rdf.Term]string)
 	reverseMap = make(map[string]rdf.Term)
-	doc := GetShaclDocument(shapes, graphName, false, "stable-brave")
+	doc := GetShaclDocument(shapes, graphName, false, StableBrave{})
 	activeDoc = &doc
 	doc.AllCondAnswers(ep)
 	program = doc.GetAllLPs().String()
@@ -722,19 +722,19 @@ func checkStableDoc(t *testing.T, ep *SparqlEndpoint, clingo []string, doc fzDoc
 	}
 
 	// stable modes (step 2), and stratified documents (step 3)
-	semantics := []string{"well-founded"}
+	semantics := []Semantics{WellFounded{}}
 	if enumerated {
 		want.brave, want.cautious = fzStableVerdicts(models, targets)
-		semantics = append(semantics, "stable-brave", "stable-cautious")
+		semantics = append(semantics, StableBrave{}, StableCautious{})
 		if doc.stratified() && (want.brave != want.wf || want.cautious != want.wf) {
 			problems = append(problems, fmt.Sprintf("oracle: stratified document with verdicts %v (wf), %v (brave), %v (cautious)",
 				want.wf, want.brave, want.cautious))
 		}
 	}
 	for _, sem := range semantics {
-		expected := map[string]ValidationStatus{"well-founded": want.wf, "stable-brave": want.brave, "stable-cautious": want.cautious}[sem]
+		expected := map[Semantics]ValidationStatus{WellFounded{}: want.wf, StableBrave{}: want.brave, StableCautious{}: want.cautious}[sem]
 		for _, forceLP := range []bool{false, true} {
-			path := sem + map[bool]string{false: "", true: " with forceLP"}[forceLP]
+			path := sem.String() + map[bool]string{false: "", true: " with forceLP"}[forceLP]
 			report, err := fzRunShawell(shapes, ep, graphName, sem, forceLP)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf("%s: panic: %v", path, err))

@@ -56,11 +56,11 @@ var blankLabelCases = []blankLabelCase{
 }
 
 // blankLabelWant returns the expected status of a case in the given mode.
-func blankLabelWant(c blankLabelCase, semantics string) ValidationStatus {
+func blankLabelWant(c blankLabelCase, semantics Semantics) ValidationStatus {
 	if c.want >= 0 {
 		return c.want
 	}
-	if semantics == "well-founded" {
+	if _, ok := semantics.(WellFounded); ok {
 		return Invalid
 	}
 	return NoModel
@@ -109,8 +109,8 @@ func runBlankLabelCases(t *testing.T, ep *SparqlEndpoint) {
 
 	for _, c := range blankLabelCases {
 		for _, variant := range []struct{ name, data string }{{"blank", c.data}, {"iri", iriVariant(c.data)}} {
-			for _, semantics := range []string{"well-founded", "stable-brave", "stable-cautious"} {
-				t.Run(c.name+"/"+variant.name+"/"+semantics, func(t *testing.T) {
+			for _, semantics := range []Semantics{WellFounded{}, StableBrave{}, StableCautious{}} {
+				t.Run(c.name+"/"+variant.name+"/"+semantics.String(), func(t *testing.T) {
 					got := validateSeparateGraphs(t, ep, "blanklabels", blankLabelPrefixes+variant.data,
 						blankLabelPrefixes+c.shapes, config{silent: true, omitVR: true, semantics: semantics}).status
 					if want := blankLabelWant(c, semantics); got != want {

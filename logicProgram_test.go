@@ -632,9 +632,9 @@ func validateDocument(t *testing.T, ep *SparqlEndpoint, name, turtle string, for
 	}
 	defer ep.ClearGraph(graphName) //nolint:errcheck
 
-	doc := GetShaclDocument(g, graphName, false, "well-founded")
+	doc := GetShaclDocument(g, graphName, false, WellFounded{})
 	activeDoc = &doc
-	report := answerShacl(ep, doc, config{silent: true, forceLP: forceLP, semantics: "well-founded"})
+	report := answerShacl(ep, doc, config{silent: true, forceLP: forceLP, semantics: WellFounded{}})
 	return report.conforms
 }
 

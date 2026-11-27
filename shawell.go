@@ -183,6 +183,103 @@ func (l labelTime) String() string {
 	return fmt.Sprintf("%s \t: %.5f ms", l.label, l.time)
 }
 
+type Semantics interface {
+	twoValued() bool
+	supported() bool
+	cautious() bool
+	String() string
+}
+
+type WellFounded struct{}
+
+func (w WellFounded) twoValued() bool {
+	return false
+}
+
+func (w WellFounded) supported() bool {
+	return false
+}
+
+func (w WellFounded) cautious() bool {
+	return false
+}
+
+func (w WellFounded) String() string {
+	return "well-founded"
+}
+
+type StableBrave struct{}
+
+func (s StableBrave) twoValued() bool {
+	return true
+}
+
+func (s StableBrave) supported() bool {
+	return false
+}
+
+func (s StableBrave) cautious() bool {
+	return false
+}
+
+func (s StableBrave) String() string {
+	return "stable-brave"
+}
+
+type StableCautious struct{}
+
+func (s StableCautious) twoValued() bool {
+	return true
+}
+
+func (s StableCautious) supported() bool {
+	return false
+}
+
+func (s StableCautious) cautious() bool {
+	return true
+}
+
+func (s StableCautious) String() string {
+	return "stable-cautious"
+}
+
+type SupportedBrave struct{}
+
+func (s SupportedBrave) twoValued() bool {
+	return true
+}
+
+func (s SupportedBrave) supported() bool {
+	return true
+}
+
+func (s SupportedBrave) cautious() bool {
+	return false
+}
+
+func (s SupportedBrave) String() string {
+	return "supported-brave"
+}
+
+type SupportedCautious struct{}
+
+func (s SupportedCautious) twoValued() bool {
+	return true
+}
+
+func (s SupportedCautious) supported() bool {
+	return true
+}
+
+func (s SupportedCautious) cautious() bool {
+	return true
+}
+
+func (s SupportedCautious) String() string {
+	return "supported-cautious"
+}
+
 var QueryStore []string
 
 // answerShacl performs SHACL validation on a parsed SHACL document against a SPARQL endpoint
@@ -277,13 +374,13 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 			}
 		}
 
-		switch config.semantics {
-		case "well-founded":
+		switch t := config.semantics.(type) {
+		case WellFounded:
 			{
 
 				start = time.Now()
 				// fmt.Println("Unified LP: ", lp)
-				lpTables, lpUndefinedTables, _ = lp.Answer(debug, false, "well-founded")
+				lpTables, lpUndefinedTables, _ = lp.Answer(debug, false, t)
 				d = time.Since(start)
 				msec = d.Seconds() * float64(time.Second/time.Millisecond)
 				c.times = append(c.times, labelTime{time: msec, label: "DLV solving"})
@@ -313,7 +410,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 				}
 
 			}
-		case "stable-brave":
+		case StableBrave:
 			{
 				// first call the LP with targets
 
@@ -325,7 +422,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 
 				start = time.Now()
 				// fmt.Println("Unified LP: ", lp)
-				lpTables, _, solveStatus = mergedLP.Answer(debug, false, "stable-brave")
+				lpTables, _, solveStatus = mergedLP.Answer(debug, false, t)
 				d = time.Since(start)
 				msec = d.Seconds() * float64(time.Second/time.Millisecond)
 				c.times = append(c.times, labelTime{time: msec, label: "clingo solving - brave call 1"})
@@ -363,7 +460,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 				} else { // next, if first call was unsatisfiable, run program without targets to see if there is any stable model at all
 					start = time.Now()
 					// fmt.Println("Unified LP: ", lp)
-					lpTables, _, solveStatus = lp.Answer(debug, false, "stable-brave")
+					lpTables, _, solveStatus = lp.Answer(debug, false, t)
 					d = time.Since(start)
 					msec = d.Seconds() * float64(time.Second/time.Millisecond)
 					c.times = append(c.times, labelTime{time: msec, label: "clingo solving - brave call 2"})
@@ -403,7 +500,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 				}
 
 			}
-		case "stable-cautious":
+		case StableCautious:
 			{
 				var solveStatus solveStatus
 
@@ -415,7 +512,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 
 					start = time.Now()
 					// fmt.Println("Unified LP: ", lp)
-					lpTables, lpUndefinedTables, solveStatus = mergedLP.Answer(debug, false, "stable-brave")
+					lpTables, lpUndefinedTables, solveStatus = mergedLP.Answer(debug, false, t)
 					d = time.Since(start)
 					msec = d.Seconds() * float64(time.Second/time.Millisecond)
 					c.times = append(c.times, labelTime{time: msec, label: "clingo solving - cautious call 1"})
@@ -428,7 +525,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 				case unsatisfiable:
 					start = time.Now()
 					// fmt.Println("Unified LP: ", lp)
-					lpTables, _, solveStatus = lp.Answer(debug, false, "stable-brave")
+					lpTables, _, solveStatus = lp.Answer(debug, false, t)
 					d = time.Since(start)
 					msec = d.Seconds() * float64(time.Second/time.Millisecond)
 					c.times = append(c.times, labelTime{time: msec, label: "clingo solving - cautious call 2"})
@@ -607,8 +704,8 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 				}
 			}
 
-			if !silent && config.semantics == "stable-cautious" && status == Invalid {
-				fmt.Fprintln(os.Stderr, "Note: the report shows one counter-model; other targets may also fail in other stable models.")
+			if !silent && config.semantics.cautious() && status == Invalid {
+				fmt.Fprintln(os.Stderr, "Note: the report shows one counter-model; other targets may also fail in other models.")
 			}
 		}
 
@@ -669,7 +766,7 @@ type config struct {
 	onlyLP      bool
 	onlyQueries bool
 	timer       bool
-	semantics   string
+	semantics   Semantics
 }
 
 // binaryExists reports whether the binary at path is reachable — stat for paths
@@ -828,7 +925,7 @@ type cliOptions struct {
 	Timer             bool           `            long:"timer"             description:"Print time composition after validation."`
 	Completion        string         `short:"c" long:"completion"         description:"Output a shell completion setup script and exit." choice:"bash" choice:"zsh" choice:"fish"`
 	Clingo            string         `long:"clingo"             description:"The location of the clingo binary used to evaluate recursive SHACL."`
-	Semantics         string         `short:"m" long:"semantics" description:"The semantics to use for recursive SHACL evaluation." choice:"well-founded" choice:"stable-brave" choice:"stable-cautious" default:"well-founded"`
+	Semantics         string         `short:"m" long:"semantics" description:"The semantics to use for recursive SHACL evaluation." choice:"well-founded" choice:"stable-brave" choice:"stable-cautious" choice:"supported-brave" choice:"supported-cautious" default:"well-founded"`
 }
 
 // printCompletion outputs the one-liner shell setup that hooks shawell into the shell's
@@ -943,9 +1040,25 @@ func main() {
 	// set DLV
 	dlv = string(opts.Dlv)
 
+	var semanticsParsed Semantics
+
+	switch opts.Semantics {
+	case "well-founded":
+		semanticsParsed = WellFounded{}
+	case "stable-brave":
+		semanticsParsed = StableBrave{}
+	case "stable-cautious":
+		semanticsParsed = StableCautious{}
+	case "supported-brave":
+		semanticsParsed = SupportedBrave{}
+	case "supported-cautious":
+		semanticsParsed = SupportedCautious{}
+
+	}
+
 	// For clingo: only needed if semantics is not well-founded and clingo path is not provided explicitly by user.
 	// FindClingo will then be used to deliver the command.
-	needClingo := opts.Semantics != "well-founded"
+	needClingo := semanticsParsed.twoValued()
 	ensureDependencies(opts.Local, needClingo && opts.Clingo == "")
 
 	var err error
@@ -1020,7 +1133,7 @@ func main() {
 
 		insertGraph := g2
 		// under stable-semantics, do not insert shapes tripes into endpoint
-		if opts.Semantics == "stable-brave" || opts.Semantics == "stable-cautious" {
+		if semanticsParsed.twoValued() {
 			var selectedTriples []*rdf.Triple
 			queue := GetNodeTerms(g2)
 			queue = append(queue, GetSubjectFromTriples(g2.All(nil, rdf.NewResource(_sh+"path"), nil))...) // property shapes
@@ -1070,7 +1183,7 @@ func main() {
 		graphName = "<" + _sh + fileName + ">"
 	}
 
-	parsedDoc := GetShaclDocument(g2, graphName, opts.Debug, opts.Semantics)
+	parsedDoc := GetShaclDocument(g2, graphName, opts.Debug, semanticsParsed)
 
 	if opts.DemoOutputLP {
 		demoLP = true
@@ -1099,7 +1212,7 @@ func main() {
 		onlyLP:      opts.DemoOutputLP,
 		onlyQueries: opts.DemoOutputQueries,
 		timer:       opts.Timer,
-		semantics:   opts.Semantics,
+		semantics:   semanticsParsed,
 	}
 
 	// Main Routine

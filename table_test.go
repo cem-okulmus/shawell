@@ -284,7 +284,7 @@ ex:b a ex:C .
 `
 	graphName := "<urn:target-cache-test>"
 	g := loadTurtle(t, ep, graphName, turtle)
-	doc := GetShaclDocument(g, graphName, false, "well-founded")
+	doc := GetShaclDocument(g, graphName, false, WellFounded{})
 
 	targetsOf := func(shape string) string {
 		// the queries GetValidationReport passes for a node shape
