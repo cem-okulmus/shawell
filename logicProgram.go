@@ -312,7 +312,7 @@ func (p serialisedProgram) runClingo(debug bool) (LPOutput, solveStatus) {
 
 	for _, r := range p.rules {
 		name, _, _ := strings.Cut(r.head, "(")
-		name = strings.TrimSpace(name)
+		name = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), "{"))
 		if strings.HasPrefix(name, "shape") && !strings.HasSuffix(name, "intern") {
 			shapes[name] = true
 		}
@@ -1050,6 +1050,62 @@ func (s *ShaclDocument) GetTargetConstraintsLPCautious(ep endpoint) (out seriali
 
 	// constraint: do not make all shapes true at the same time
 	out.rules = append(out.rules, serialisedRule{head: "", body: allShapeTrueAtoms})
+
+	return out
+}
+
+// completion returns a program whose stable models are the supported models of p: every atom h of a shape
+// predicate is chosen freely, and is true iff one of its rule bodies holds (Clark completion). Rules for other
+// predicates are kept as they are.
+func (p serialisedProgram) completion(shapePreds map[string]bool) (out serialisedProgram) {
+
+	bodyMap := make(map[string][][]string)
+
+	var order []string // keys in order of first appearance, so the output is deterministic
+
+	for _, rule := range p.rules {
+
+		key := strings.Join(strings.Fields(rule.head), "")
+		headAtom, _, found := strings.Cut(key, "(")
+
+		if !found || !shapePreds[headAtom] { // unaffected rule, so we keep it as-is
+			out.rules = append(out.rules, rule)
+			continue
+		}
+
+		if _, seen := bodyMap[key]; !seen {
+			order = append(order, key)
+		}
+
+		bodyMap[key] = append(bodyMap[key], rule.body)
+
+	}
+
+	for _, shape := range order {
+		bodies := bodyMap[shape]
+
+		// each of the original bodies of shape now derive its support atom
+		for _, body := range bodies {
+			out.rules = append(out.rules, serialisedRule{
+				head: "sup_" + shape,
+				body: body,
+			})
+		}
+
+		// choice atom
+		out.rules = append(out.rules, serialisedRule{
+			head: "{ " + shape + " }",
+		})
+
+		// constraints that force shape atoms and their support to be equivalent
+		out.rules = append(out.rules, serialisedRule{
+			body: []string{shape, " not sup_" + shape},
+		})
+
+		out.rules = append(out.rules, serialisedRule{
+			body: []string{"sup_" + shape, "not " + shape},
+		})
+	}
 
 	return out
 }

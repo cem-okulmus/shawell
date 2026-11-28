@@ -1509,3 +1509,14 @@ func (s ShaclDocument) GetNoModelReport(unknown bool) (out []ValidationResult) {
 
 	return out
 }
+
+func (s ShaclDocument) shapePredicates() map[string]bool {
+	out := make(map[string]bool)
+
+	for _, shape := range s.shapeNames {
+
+		out[shape.GetLogName()] = true
+	}
+
+	return out
+}

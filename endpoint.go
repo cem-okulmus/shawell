@@ -252,7 +252,9 @@ func (s *SparqlEndpoint) Answer(ns Shape, targets []SparqlQueryFlat) Table[rdf.T
 		}
 
 		// fmt.Print("adding the query ", query.String())
-		QueryStore = append(QueryStore, query.String())
+		if QueryStore != nil {
+			*QueryStore = append(*QueryStore, query.String())
+		}
 		res, err := s.repo.Query(query.String())
 		if err != nil {
 			fmt.Println("Query in question:\n ", query)

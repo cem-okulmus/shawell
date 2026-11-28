@@ -280,7 +280,29 @@ func (s SupportedCautious) String() string {
 	return "supported-cautious"
 }
 
-var QueryStore []string
+func parseSemantics(semantics string) (out Semantics) {
+
+	switch semantics {
+	case "well-founded":
+		out = WellFounded{}
+	case "stable-brave":
+		out = StableBrave{}
+	case "stable-cautious":
+		out = StableCautious{}
+	case "supported-brave":
+		out = SupportedBrave{}
+	case "supported-cautious":
+		out = SupportedCautious{}
+
+	default:
+		log.Panicln("Unknown Semantics: ", semantics)
+	}
+
+	return out
+
+}
+
+var QueryStore *[]string
 
 // answerShacl performs SHACL validation on a parsed SHACL document against a SPARQL endpoint
 // using well-founded semantics. It handles both acyclic and recursive constraint patterns.
@@ -319,7 +341,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 	if onlyQueries {
 		fmt.Println("The produced SPAQRL queries: ")
 
-		for _, query := range QueryStore {
+		for _, query := range *QueryStore {
 			fmt.Println(abbr(query))
 		}
 
@@ -366,6 +388,10 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 		msec := d.Seconds() * float64(time.Second/time.Millisecond)
 		c.times = append(c.times, labelTime{time: msec, label: "Logic Program generation"})
 
+		if config.semantics.supported() {
+			lp = lp.completion(parsedDoc.shapePredicates())
+		}
+
 		if debug || onlyLP {
 			fmt.Print("The produced Logic Program:  \n\n")
 			fmt.Println(abbr(lp.String()))
@@ -410,7 +436,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 				}
 
 			}
-		case StableBrave:
+		case StableBrave, SupportedBrave:
 			{
 				// first call the LP with targets
 
@@ -500,7 +526,7 @@ func answerShacl(ep *SparqlEndpoint, parsedDoc ShaclDocument, config config) *Va
 				}
 
 			}
-		case StableCautious:
+		case StableCautious, SupportedCautious:
 			{
 				var solveStatus solveStatus
 
@@ -1040,21 +1066,11 @@ func main() {
 	// set DLV
 	dlv = string(opts.Dlv)
 
-	var semanticsParsed Semantics
-
-	switch opts.Semantics {
-	case "well-founded":
-		semanticsParsed = WellFounded{}
-	case "stable-brave":
-		semanticsParsed = StableBrave{}
-	case "stable-cautious":
-		semanticsParsed = StableCautious{}
-	case "supported-brave":
-		semanticsParsed = SupportedBrave{}
-	case "supported-cautious":
-		semanticsParsed = SupportedCautious{}
-
+	if opts.DemoOutputQueries {
+		QueryStore = &[]string{}
 	}
+
+	semanticsParsed := parseSemantics(opts.Semantics)
 
 	// For clingo: only needed if semantics is not well-founded and clingo path is not provided explicitly by user.
 	// FindClingo will then be used to deliver the command.
